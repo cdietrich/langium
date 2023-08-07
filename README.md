@@ -3,7 +3,7 @@
     <img alt="Langium Logo" width="60%" src="https://user-images.githubusercontent.com/4377073/135283991-90ef7724-649d-440a-8720-df13c23bda82.png">
   </a>
   <h3>
-    Next-gen language engineering framework
+    Next-gen language engineering framework xxx
   </h3>
 </div>
 
