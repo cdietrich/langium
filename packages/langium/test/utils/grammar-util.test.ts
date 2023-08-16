@@ -60,25 +60,25 @@ describe('Grammar Utils', () => {
 
     test('getAllReachableRules should not return unused rules', async () => {
         // no implicit ID rule call in cross ref
-       // [A] is short for [A:ID] thus the ID rule is needed by the parser and getAllReachableRules should return ID
-       const grammar1 = await parse(`
-       grammar G1
-       entry A:
-           'A' name=ID;
-       Other: name=STRING; 
-       terminal ID: /[_a-zA-Z][\\w_]*/;
-       `);
-       const grammar2 = await parse(`
-       grammar G2
-       import './${Utils.basename(grammar1.uri)}'
-       entry B: ref=[A];
-       `);
-       await services.shared.workspace.DocumentBuilder.build([grammar2, grammar1]);
-       // act
-       const reachableRules = [...getAllReachableRules(grammar2.parseResult.value, true)].map(r => r.name);
-       
-       // assert
-       expect(reachableRules).not.toContain('STRING');
+        // [A] is short for [A:ID] thus the ID rule is needed by the parser and getAllReachableRules should return ID
+        const grammar1 = await parse(`
+        grammar G1
+        entry A:
+        'A' name=ID;
+        Other: name=STRING; 
+        terminal ID: /[_a-zA-Z][\\w_]*/;
+        `);
+        const grammar2 = await parse(`
+        grammar G2
+        import './${Utils.basename(grammar1.uri)}'
+        entry B: ref=[A];
+        `);
+        await services.shared.workspace.DocumentBuilder.build([grammar2, grammar1]);
+        // act
+        const reachableRules = [...getAllReachableRules(grammar2.parseResult.value, true)].map(r => r.name);
+
+        // assert
+        expect(reachableRules).not.toContain('STRING');
     });
 
 });

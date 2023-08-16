@@ -53,22 +53,28 @@ export function getAllReachableRules(grammar: ast.Grammar, allTerminals: boolean
     }
 
     const topMostRules = [entryRule as ast.AbstractRule].concat(getHiddenRules(grammar));
-    const rules = new Set<ast.AbstractRule>();
+    const collectedRules = new Set<ast.AbstractRule>();
     for (const rule of topMostRules) {
-        ruleDfs(rule, rules, allTerminals);
+        ruleDfs(rule, collectedRules, allTerminals);
     }
 
+    const rules = new Set<ast.AbstractRule>();
     for (const rule of grammar.rules) {
-        if ((ast.isTerminalRule(rule) && rule.hidden)) {
+        if (collectedRules.has(rule) || ((ast.isTerminalRule(rule) && rule.hidden))) {
             rules.add(rule);
         }
     }
-    
+    for (const rule of collectedRules) {
+        if (!rules.has(rule)) {
+            rules.add(rule);
+        }
+    }
+
     return rules;
 }
 
 function ruleDfs(rule: ast.AbstractRule, visitedRules: Set<ast.AbstractRule> , allTerminals: boolean): void {
-    visitedRules.add(rule)
+    visitedRules.add(rule);
     streamAllContents(rule).forEach(node => {
         if (ast.isRuleCall(node) || (allTerminals && ast.isTerminalRuleCall(node))) {
             const refRule = node.rule.ref;
@@ -76,7 +82,7 @@ function ruleDfs(rule: ast.AbstractRule, visitedRules: Set<ast.AbstractRule> , a
                 ruleDfs(refRule, visitedRules, allTerminals);
             }
         } else if (ast.isCrossReference(node)) {
-            const term = getCrossReferenceTerminal(node)
+            const term = getCrossReferenceTerminal(node);
             if (term !== undefined) {
                 if (ast.isRuleCall(term) || (allTerminals && ast.isTerminalRuleCall(term))) {
                     const refRule = term.rule.ref;
