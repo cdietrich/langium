@@ -103,8 +103,16 @@ describe('DefaultDocumentBuilder', () => {
 
         const builder = services.shared.workspace.DocumentBuilder;
         const tokenSource1 = new CancellationTokenSource();
+        let d1v = false;
+        let d2v = false;
         builder.onBuildPhase(DocumentState.Validated, (x) => {
             console.log(`Validated ${x.map(d => d.uri.toString())}`);
+            if (x.some(d => d.uri === document1.uri)) {
+                d1v = true;
+            }
+            if (x.some(d => d.uri === document2.uri)) {
+                d2v = true;
+            }
         });
         try {
             await builder.build([document1, document2], { validation: true }, tokenSource1.token);
@@ -128,6 +136,8 @@ describe('DefaultDocumentBuilder', () => {
         expect(document2.diagnostics?.map(d => d.message)).toEqual([
             'Value is too large: 11'
         ]);
+        expect(d2v).toBe(true);
+        expect(d1v).toBe(true);
     });
 
     test('includes document with references to updated document', async () => {
