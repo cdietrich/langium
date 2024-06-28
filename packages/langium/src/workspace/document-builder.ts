@@ -310,10 +310,17 @@ export class DefaultDocumentBuilder implements DocumentBuilder {
     protected async runCancelable(documents: LangiumDocument[], targetState: DocumentState, cancelToken: CancellationToken,
         callback: (document: LangiumDocument) => MaybePromise<unknown>): Promise<void> {
         const filtered = documents.filter(e => e.state < targetState);
+        let counter = 0;
         for (const document of filtered) {
+            console.log(`${document.uri.toString()} - ${document.state} -> ${targetState} : ${counter}`)
+            if (targetState === DocumentState.Validated && counter > 0) {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                (cancelToken as any).cancel();
+            }
             await interruptAndCheck(cancelToken);
             await callback(document);
             document.state = targetState;
+            counter++;
         }
         await this.notifyBuildPhase(filtered, targetState, cancelToken);
         this.currentState = targetState;
@@ -392,6 +399,7 @@ export class DefaultDocumentBuilder implements DocumentBuilder {
      * If the document already contains diagnostics, the new ones are added to the list.
      */
     protected async validate(document: LangiumDocument, cancelToken: CancellationToken): Promise<void> {
+        console.log(`Validating ${document.uri.toString()}`);
         const validator = this.serviceRegistry.getServices(document.uri).validation.DocumentValidator;
         const validationSetting = this.getBuildOptions(document).validation;
         const options = typeof validationSetting === 'object' ? validationSetting : undefined;

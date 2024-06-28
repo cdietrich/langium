@@ -103,27 +103,31 @@ describe('DefaultDocumentBuilder', () => {
 
         const builder = services.shared.workspace.DocumentBuilder;
         const tokenSource1 = new CancellationTokenSource();
-        builder.onBuildPhase(DocumentState.IndexedContent, () => {
-            tokenSource1.cancel();
+        builder.onBuildPhase(DocumentState.Validated, (x) => {
+            console.log(`Validated ${x.map(d => d.uri.toString())}`);
         });
         try {
-            await builder.build([document1, document2], {}, tokenSource1.token);
+            await builder.build([document1, document2], { validation: true }, tokenSource1.token);
         } catch (err) {
             expect(isOperationCancelled(err)).toBe(true);
         }
-        expect(document1.state).toBe(DocumentState.IndexedContent);
-        expect(document2.state).toBe(DocumentState.IndexedContent);
+        console.log(document1.state);
+        console.log(document2.state);
+        expect(document1.state).toBe(DocumentState.Validated);
+        expect(document2.state).toBe(DocumentState.IndexedReferences);
 
-        setTextDocument(services, document1.textDocument);
-        await builder.update([document1.uri], []);
+        setTextDocument(services, document2.textDocument);
+        await builder.update([document2.uri], []);
         // While the first document is built with validation due to its reported update, the second one
         // is resumed with its initial build options, which did not include validation.
         expect(document1.state).toBe(DocumentState.Validated);
         expect(document1.diagnostics?.map(d => d.message)).toEqual([
             'Value is too large: 11'
         ]);
-        expect(document2.state).toBe(DocumentState.IndexedReferences);
-        expect(document2.diagnostics).toBeUndefined();
+        expect(document2.state).toBe(DocumentState.Validated);
+        expect(document2.diagnostics?.map(d => d.message)).toEqual([
+            'Value is too large: 11'
+        ]);
     });
 
     test('includes document with references to updated document', async () => {
