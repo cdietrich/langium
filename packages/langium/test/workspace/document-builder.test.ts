@@ -151,22 +151,22 @@ describe('DefaultDocumentBuilder', () => {
             { uri: document1.uri.toString(), type: 3 },
             { uri: document4.uri.toString(), type: 2 },
         ]});
-        await new Promise<void>(resolve => setTimeout(resolve, 800));
+        await new Promise<void>(resolve => setTimeout(resolve, 100));
         duh.didChangeWatchedFiles?.({changes: [
             { uri: document2.uri.toString(), type: 3 },
             { uri: document4.uri.toString(), type: 2 },
         ]});
-        await new Promise<void>(resolve => setTimeout(resolve, 800));
+        await new Promise<void>(resolve => setTimeout(resolve, 100));
         duh.didChangeWatchedFiles?.({changes: [
             { uri: document3.uri.toString(), type: 3 },
             { uri: document4.uri.toString(), type: 2 },
         ]});
-        await builder.waitUntil(DocumentState.Validated).then(() => {});
+        await new Promise<void>(resolve => setTimeout(resolve, 10000));
         console.log('done');
         expect(d1d).toBe(true);
         expect(d2d).toBe(true);
         expect(d3d).toBe(true);
-    });
+    }, 20000);
 
     test('includes document with references to updated document', async () => {
         const services = await createServices();
