@@ -219,6 +219,7 @@ export class DefaultDocumentBuilder implements DocumentBuilder {
             )
             .toArray();
         await this.buildDocuments(rebuildDocuments, this.updateBuildOptions, cancelToken);
+        await new Promise<void>(resolve => setTimeout(resolve, 1000));
     }
 
     protected async emitUpdate(changed: URI[], deleted: URI[]): Promise<void> {
@@ -313,10 +314,10 @@ export class DefaultDocumentBuilder implements DocumentBuilder {
         let counter = 0;
         for (const document of filtered) {
             console.log(`${document.uri.toString()} - ${document.state} -> ${targetState} : ${counter}`)
-            if (targetState === DocumentState.Validated && counter > 0) {
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                (cancelToken as any).cancel();
-            }
+            // if (targetState === DocumentState.Validated && counter > 0) {
+            //     // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            //     (cancelToken as any).cancel();
+            // }
             await interruptAndCheck(cancelToken);
             await callback(document);
             document.state = targetState;

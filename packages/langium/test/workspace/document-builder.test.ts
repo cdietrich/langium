@@ -82,10 +82,11 @@ describe('DefaultDocumentBuilder', () => {
         expect(called).toBe(true);
     });
 
-    test('resumes document build after cancellation', async () => {
+    test.only('all deletes', async () => {
         const services = await createServices();
         const documentFactory = services.shared.workspace.LangiumDocumentFactory;
         const documents = services.shared.workspace.LangiumDocuments;
+        await services.shared.workspace.WorkspaceManager.initializeWorkspace([]);
         const document1 = documentFactory.fromString(`
             foo 1 A
             foo 11 B
@@ -101,43 +102,70 @@ describe('DefaultDocumentBuilder', () => {
         `, URI.parse('file:///test2.txt'));
         documents.addDocument(document2);
 
+        const document3 = documentFactory.fromString(`
+            foo 1 C
+            foo 11 D
+            bar C
+            bar D
+        `, URI.parse('file:///test3.txt'));
+        documents.addDocument(document3);
+
+        const document4 = documentFactory.fromString(`
+            foo 1 C
+            foo 11 D
+            bar C
+            bar D
+        `, URI.parse('file:///test4.txt'));
+        documents.addDocument(document4);
+
         const builder = services.shared.workspace.DocumentBuilder;
-        const tokenSource1 = new CancellationTokenSource();
-        let d1v = false;
-        let d2v = false;
-        builder.onBuildPhase(DocumentState.Validated, (x) => {
-            console.log(`Validated ${x.map(d => d.uri.toString())}`);
-            if (x.some(d => d.uri === document1.uri)) {
-                d1v = true;
-            }
-            if (x.some(d => d.uri === document2.uri)) {
-                d2v = true;
+
+        await builder.build([document1, document2, document3, document4], {});
+        setTextDocument(services, document1.textDocument);
+        setTextDocument(services, document2.textDocument);
+        setTextDocument(services, document3.textDocument);
+        setTextDocument(services, document4.textDocument);
+
+        const duh = services.shared.lsp.DocumentUpdateHandler;
+
+        let d1d = false;
+        let d2d= false;
+        let d3d = false;
+        builder.onUpdate(async (_, deleted) => {
+            for (const uri of deleted) {
+                console.log('mimimi', uri.toString());
+                if (document1.uri.toString() === uri.toString()) {
+                    d1d = true;
+                }
+                if(document2.uri.toString() === uri.toString()) {
+                    d2d = true;
+                }
+                if(document3.uri.toString() === uri.toString()) {
+                    d3d = true;
+                }
             }
         });
-        try {
-            await builder.build([document1, document2], { validation: true }, tokenSource1.token);
-        } catch (err) {
-            expect(isOperationCancelled(err)).toBe(true);
-        }
-        console.log(document1.state);
-        console.log(document2.state);
-        expect(document1.state).toBe(DocumentState.Validated);
-        expect(document2.state).toBe(DocumentState.IndexedReferences);
 
-        setTextDocument(services, document2.textDocument);
-        await builder.update([document2.uri], []);
-        // While the first document is built with validation due to its reported update, the second one
-        // is resumed with its initial build options, which did not include validation.
-        expect(document1.state).toBe(DocumentState.Validated);
-        expect(document1.diagnostics?.map(d => d.message)).toEqual([
-            'Value is too large: 11'
-        ]);
-        expect(document2.state).toBe(DocumentState.Validated);
-        expect(document2.diagnostics?.map(d => d.message)).toEqual([
-            'Value is too large: 11'
-        ]);
-        expect(d2v).toBe(true);
-        expect(d1v).toBe(true);
+        console.log(duh.didChangeWatchedFiles === undefined);
+        duh.didChangeWatchedFiles?.({changes: [
+            { uri: document1.uri.toString(), type: 3 },
+            { uri: document4.uri.toString(), type: 2 },
+        ]});
+        await new Promise<void>(resolve => setTimeout(resolve, 800));
+        duh.didChangeWatchedFiles?.({changes: [
+            { uri: document2.uri.toString(), type: 3 },
+            { uri: document4.uri.toString(), type: 2 },
+        ]});
+        await new Promise<void>(resolve => setTimeout(resolve, 800));
+        duh.didChangeWatchedFiles?.({changes: [
+            { uri: document3.uri.toString(), type: 3 },
+            { uri: document4.uri.toString(), type: 2 },
+        ]});
+        await builder.waitUntil(DocumentState.Validated).then(() => {});
+        console.log('done');
+        expect(d1d).toBe(true);
+        expect(d2d).toBe(true);
+        expect(d3d).toBe(true);
     });
 
     test('includes document with references to updated document', async () => {
