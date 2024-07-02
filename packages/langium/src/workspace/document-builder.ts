@@ -205,6 +205,7 @@ export class DefaultDocumentBuilder implements DocumentBuilder {
                 doc.diagnostics = undefined;
             });
         // Notify listeners of the update
+        await new Promise<void>(resolve => setTimeout(resolve, 1000));
         await this.emitUpdate(changed, deleted);
         // Only allow interrupting the execution after all state changes are done
         await interruptAndCheck(cancelToken);
