@@ -8,7 +8,7 @@ import type { AstNode } from 'langium';
 import { createServicesForGrammar } from 'langium/grammar';
 import { expandToStringLF } from 'langium/generate';
 import { beforeEach, describe, expect, test } from 'vitest';
-import { clearDocuments } from 'langium/test';
+import { clearDocuments, parseHelper } from 'langium/test';
 
 describe('TextSerializer', async () => {
 
@@ -202,5 +202,93 @@ describe('TextSerializer', async () => {
 
         expect(serializer.serialize(repeated as AstNode)).toBe('repeat a b');
         expect(serializer.serialize(empty as AstNode)).toBe('repeat');
+    });
+});
+
+describe('TextSerializer Roundtrip Tests', async () => {
+
+    const grammar = expandToStringLF`
+        grammar TextSerializerTest
+
+        entry Model: items+=Item (',' items+=Item)*;
+
+        Item: 'item' name=ID ('ref' ref=[Item])?;
+
+        hidden terminal WS: /\\s+/;
+        terminal ID: /[_a-zA-Z][\\w]*/;
+        terminal INT returns number: /[0-9]+/;
+        terminal STRING: /"[^"]*"/;
+    `;
+
+    const services = await createServicesForGrammar({ grammar });
+    const serializer = services.serializer.TextSerializer;
+    const jsonSerializer = services.serializer.JsonSerializer;
+    const parse = parseHelper<AstNode>(services);
+
+    beforeEach(() => {
+        clearDocuments(services);
+    });
+
+    /**
+     * Roundtrip test helper: Parse text, serialize to text, parse again, compare ASTs via JSON
+     */
+    async function expectRoundtrip(input: string, options?: { space?: string; useRefText?: boolean }) {
+        // Parse original text
+        const doc1 = await parse(input);
+        await services.shared.workspace.DocumentBuilder.build([doc1]);
+        expect(doc1.parseResult.lexerErrors).toHaveLength(0);
+        expect(doc1.parseResult.parserErrors).toHaveLength(0);
+        const ast1 = doc1.parseResult.value;
+
+        // Serialize to text
+        const serialized = serializer.serialize(ast1, options);
+
+        // Parse serialized text
+        const doc2 = await parse(serialized);
+        await services.shared.workspace.DocumentBuilder.build([doc2]);
+        expect(doc2.parseResult.lexerErrors).toHaveLength(0);
+        expect(doc2.parseResult.parserErrors).toHaveLength(0);
+        const ast2 = doc2.parseResult.value;
+
+        // Compare ASTs via JSON (ignoring $cstNode and other internal properties)
+        const json1 = jsonSerializer.serialize(ast1);
+        const json2 = jsonSerializer.serialize(ast2);
+        expect(json1).toBe(json2);
+    }
+
+    test('Roundtrip: Basic model with items', async () => {
+        await expectRoundtrip('item a , item b , item c');
+    });
+
+    test('Roundtrip: Model with cross-references', async () => {
+        await expectRoundtrip('item a , item b ref a , item c ref b');
+    });
+
+    test('Roundtrip: Single item', async () => {
+        await expectRoundtrip('item single');
+    });
+
+    test('Roundtrip: Item with reference', async () => {
+        await expectRoundtrip('item first , item second ref first');
+    });
+
+    test('Roundtrip: Multiple items with chained references', async () => {
+        await expectRoundtrip('item a , item b ref a , item c ref b , item d ref c');
+    });
+
+    test('Roundtrip: Many items', async () => {
+        await expectRoundtrip('item one , item two , item three , item four , item five');
+    });
+
+    test('Roundtrip: Complex reference pattern', async () => {
+        await expectRoundtrip('item x , item y ref x , item z , item w ref y');
+    });
+
+    test('Roundtrip: With custom space separator', async () => {
+        await expectRoundtrip('item a , item b', { space: '  ' });
+    });
+
+    test('Roundtrip: With newline separator', async () => {
+        await expectRoundtrip('item a , item b , item c', { space: '\n' });
     });
 });
