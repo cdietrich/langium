@@ -28,9 +28,13 @@ describe('TextSerializer', async () => {
 
         StringData: 'string' value=STRING;
 
+        TerminalEcho: 'term' value=INT INT;
+
         Wrapper: 'wrap' Item;
 
         MultiRef: 'multiref' refs+=[Item] (',' refs+=[Item])*;
+
+        NumberList: 'numbers' values+=INT (',' values+=INT)*;
 
         Pair: 'pair' values+=ID values+=ID;
 
@@ -103,6 +107,12 @@ describe('TextSerializer', async () => {
         expect(serializer.serialize(stringData as AstNode)).toBe('string "hello"');
     });
 
+    test('Serialize unassigned terminal rule calls', () => {
+        const echo = { $type: 'TerminalEcho', value: 3 };
+
+        expect(serializer.serialize(echo as AstNode)).toBe('term 3 3');
+    });
+
     test('Serialize unassigned rule calls', () => {
         const item = { $type: 'Item', name: 'a' };
         const wrapper = { $type: 'Wrapper', item };
@@ -128,6 +138,14 @@ describe('TextSerializer', async () => {
         const text = serializer.serialize(multiRef as AstNode);
 
         expect(text).toBe('multiref a , b , c');
+    });
+
+    test('Serialize primitive lists with separators', () => {
+        const numbers = { $type: 'NumberList', values: [1, 2, 3] };
+
+        const text = serializer.serialize(numbers as AstNode);
+
+        expect(text).toBe('numbers 1 , 2 , 3');
     });
 
     test('Serialize repeated assignments in a group', () => {
