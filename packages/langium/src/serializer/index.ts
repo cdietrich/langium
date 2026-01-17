@@ -6,3 +6,4 @@
 
 export * from './hydrator.js';
 export * from './json-serializer.js';
+export * from './text-serializer.js';
