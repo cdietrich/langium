@@ -5,7 +5,7 @@
  ******************************************************************************/
 
 import type { LangiumCoreServices } from '../services.js';
-import type { Grammar, AbstractElement, ParserRule } from '../languages/generated/ast.js';
+import type { Grammar, AbstractElement, ParserRule, Assignment, RuleCall, TerminalRuleCall, CrossReference } from '../languages/generated/ast.js';
 import { isAction, isAlternatives, isAssignment, isCrossReference, isGroup, isKeyword, isParserRule, isRuleCall, isTerminalRule, isTerminalRuleCall, isUnorderedGroup } from '../languages/generated/ast.js';
 import type { AstNode, AstReflection, GenericAstNode, Reference } from '../syntax-tree.js';
 import { isAstNode, isMultiReference, isReference } from '../syntax-tree.js';
@@ -187,7 +187,7 @@ export class DefaultTextSerializer implements TextSerializer {
         return tokens;
     }
 
-    protected emitAssignment(assignment: import('../languages/generated/ast.js').Assignment, context: EmitContext, options: Required<TextSerializeOptions>, iteration?: IterationContext): string[] | undefined {
+    protected emitAssignment(assignment: Assignment, context: EmitContext, options: Required<TextSerializeOptions>, iteration?: IterationContext): string[] | undefined {
         const feature = assignment.feature;
         const value = (context.node as GenericAstNode)[feature];
         if (assignment.operator === '?=') {
@@ -293,7 +293,7 @@ export class DefaultTextSerializer implements TextSerializer {
         return undefined;
     }
 
-    protected emitUnassignedRuleCall(element: import('../languages/generated/ast.js').RuleCall | import('../languages/generated/ast.js').TerminalRuleCall, context: EmitContext, options: Required<TextSerializeOptions>, iteration?: IterationContext): string[] | undefined {
+    protected emitUnassignedRuleCall(element: RuleCall | TerminalRuleCall, context: EmitContext, options: Required<TextSerializeOptions>, iteration?: IterationContext): string[] | undefined {
         const rule = element.rule.ref;
         if (!rule) {
             return undefined;
@@ -324,7 +324,7 @@ export class DefaultTextSerializer implements TextSerializer {
         return undefined;
     }
 
-    protected emitCrossReference(crossRef: import('../languages/generated/ast.js').CrossReference, value: unknown, context: EmitContext, options: Required<TextSerializeOptions>, iteration?: IterationContext): string[] | undefined {
+    protected emitCrossReference(crossRef: CrossReference, value: unknown, context: EmitContext, options: Required<TextSerializeOptions>, iteration?: IterationContext): string[] | undefined {
         const targetTerminal = getCrossReferenceTerminal(crossRef) ?? crossRef.terminal;
         if (!targetTerminal) {
             return undefined;
