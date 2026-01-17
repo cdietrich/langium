@@ -23,6 +23,7 @@ import type { References } from './references/references.js';
 import type { ScopeComputation } from './references/scope-computation.js';
 import type { ScopeProvider } from './references/scope-provider.js';
 import type { JsonSerializer } from './serializer/json-serializer.js';
+import type { TextSerializer } from './serializer/text-serializer.js';
 import type { ServiceRegistry } from './service-registry.js';
 import type { AstReflection } from './syntax-tree.js';
 import type { DocumentValidator } from './validation/document-validator.js';
@@ -80,6 +81,7 @@ export type LangiumDefaultCoreServices = {
     readonly serializer: {
         readonly Hydrator: Hydrator
         readonly JsonSerializer: JsonSerializer
+        readonly TextSerializer: TextSerializer
     }
     readonly validation: {
         readonly DocumentValidator: DocumentValidator
