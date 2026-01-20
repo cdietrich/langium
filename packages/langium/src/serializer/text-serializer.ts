@@ -20,11 +20,38 @@ import {
     isDataTypeRule
 } from '../utils/grammar-utils.js';
 
+/**
+ * Context passed to the serializeValue hook for customizing primitive value serialization.
+ */
+export interface SerializeValueContext {
+    /** The AST node containing this value */
+    node: AstNode;
+    /** The property name on the AST node */
+    property: string;
+    /** The raw value to serialize */
+    value: unknown;
+    /** The grammar rule name being applied (e.g., 'STRING', 'ID', 'INT') */
+    ruleName: string;
+    /** The language ID from services.LanguageMetaData */
+    languageId: string;
+}
+
 export interface TextSerializeOptions {
     /** The token separator to use between emitted tokens. */
     space?: string;
     /** Prefer using $refText when serializing references. */
     useRefText?: boolean;
+    /** Custom hook to format primitive values from terminal/datatype rules. */
+    serializeValue?: (context: SerializeValueContext) => string;
+}
+
+/**
+ * Internal resolved options type with required defaults but optional hook.
+ */
+interface ResolvedTextSerializeOptions {
+    space: string;
+    useRefText: boolean;
+    serializeValue?: (context: SerializeValueContext) => string;
 }
 
 export interface TextSerializer {
@@ -85,6 +112,7 @@ export class DefaultTextSerializer implements TextSerializer {
     protected readonly grammar: Grammar;
     protected readonly nameProvider: NameProvider;
     protected readonly astReflection: AstReflection;
+    protected readonly languageId: string;
     protected readonly ruleTargets = new Map<string, RuleTarget>();
     /** Cache of types each parser rule can produce, built once during construction. */
     protected readonly ruleProducibleTypes = new Map<ParserRule, Set<string>>();
@@ -93,6 +121,7 @@ export class DefaultTextSerializer implements TextSerializer {
         this.grammar = services.Grammar;
         this.nameProvider = services.references.NameProvider;
         this.astReflection = services.shared.AstReflection;
+        this.languageId = services.LanguageMetaData.languageId;
         this.collectRuleTargets();
         this.buildRuleProducibleTypes();
     }
@@ -111,7 +140,7 @@ export class DefaultTextSerializer implements TextSerializer {
         return tokens.join(resolvedOptions.space).trim();
     }
 
-    protected emitNode(node: AstNode, context: EmitContext, options: Required<TextSerializeOptions>, rule?: ParserRule): string[] {
+    protected emitNode(node: AstNode, context: EmitContext, options: ResolvedTextSerializeOptions, rule?: ParserRule): string[] {
         const targetRule = rule ?? this.ruleTargets.get(node.$type)?.rule;
         if (!targetRule) {
             throw new Error(`No grammar rule found for AST type '${node.$type}'.`);
@@ -127,7 +156,7 @@ export class DefaultTextSerializer implements TextSerializer {
         return tokens;
     }
 
-    protected emitElement(element: AbstractElement, context: EmitContext, options: Required<TextSerializeOptions>, iteration?: IterationContext): string[] | undefined {
+    protected emitElement(element: AbstractElement, context: EmitContext, options: ResolvedTextSerializeOptions, iteration?: IterationContext): string[] | undefined {
         if (isKeyword(element)) {
             return [element.value];
         }
@@ -138,7 +167,8 @@ export class DefaultTextSerializer implements TextSerializer {
             return this.emitUnassignedRuleCall(element, context, options, iteration) ?? this.optionalResult(element);
         }
         if (isCrossReference(element)) {
-            return this.emitCrossReference(element, undefined, context, options, iteration) ?? this.optionalResult(element);
+            // Unassigned cross-reference - property name is empty
+            return this.emitCrossReference(element, undefined, context, options, '', iteration) ?? this.optionalResult(element);
         }
         if (isAlternatives(element)) {
             return this.emitAlternativesWithPriority(
@@ -156,7 +186,7 @@ export class DefaultTextSerializer implements TextSerializer {
         return [];
     }
 
-    protected emitGroup(elements: AbstractElement[], cardinality: AbstractElement['cardinality'], context: EmitContext, options: Required<TextSerializeOptions>, iteration?: IterationContext): string[] | undefined {
+    protected emitGroup(elements: AbstractElement[], cardinality: AbstractElement['cardinality'], context: EmitContext, options: ResolvedTextSerializeOptions, iteration?: IterationContext): string[] | undefined {
         const repetitionCount = this.getGroupRepetitionCount(elements, cardinality, context, iteration);
         if (repetitionCount === 0) {
             return cardinality === '+' ? undefined : [];
@@ -171,7 +201,7 @@ export class DefaultTextSerializer implements TextSerializer {
      * Emits a group once (non-array cardinality).
      * Special handling for `+=` operators that appear multiple times in the same group.
      */
-    protected emitGroupOnce(elements: AbstractElement[], context: EmitContext, options: Required<TextSerializeOptions>, iteration?: IterationContext): string[] | undefined {
+    protected emitGroupOnce(elements: AbstractElement[], context: EmitContext, options: ResolvedTextSerializeOptions, iteration?: IterationContext): string[] | undefined {
         const tokens: string[] = [];
         const assignmentCounts = this.collectAssignmentCounts(elements);
         for (const child of elements) {
@@ -202,7 +232,7 @@ export class DefaultTextSerializer implements TextSerializer {
     /**
      * Emits a group multiple times (array cardinality `*` or `+`).
      */
-    protected emitGroupRepeated(elements: AbstractElement[], repetitionCount: number, context: EmitContext, options: Required<TextSerializeOptions>, iteration?: IterationContext): string[] | undefined {
+    protected emitGroupRepeated(elements: AbstractElement[], repetitionCount: number, context: EmitContext, options: ResolvedTextSerializeOptions, iteration?: IterationContext): string[] | undefined {
         const tokens: string[] = [];
         const arrayAssignments = this.collectArrayAssignments(elements, context.node, iteration);
         const baseUsage = new Map<string, number>();
@@ -228,7 +258,7 @@ export class DefaultTextSerializer implements TextSerializer {
     /**
      * Emits a single child element within a group, treating `?=` assignments as optional.
      */
-    protected emitGroupChild(child: AbstractElement, context: EmitContext, options: Required<TextSerializeOptions>, iteration?: IterationContext): string[] | undefined {
+    protected emitGroupChild(child: AbstractElement, context: EmitContext, options: ResolvedTextSerializeOptions, iteration?: IterationContext): string[] | undefined {
         const tokens = this.emitElement(child, context, options, iteration);
         if (tokens === undefined && isAssignment(child) && child.operator === '?=') {
             return []; // ?= assignments are optional in groups
@@ -236,12 +266,12 @@ export class DefaultTextSerializer implements TextSerializer {
         return tokens;
     }
 
-    protected emitAssignment(assignment: Assignment, context: EmitContext, options: Required<TextSerializeOptions>, iteration?: IterationContext): string[] | undefined {
+    protected emitAssignment(assignment: Assignment, context: EmitContext, options: ResolvedTextSerializeOptions, iteration?: IterationContext): string[] | undefined {
         const feature = assignment.feature;
         const value = (context.node as GenericAstNode)[feature];
         if (assignment.operator === '?=') {
             if (value === true) {
-                return this.emitTerminal(assignment.terminal, value, context, options, iteration);
+                return this.emitTerminal(assignment.terminal, value, context, options, feature, iteration);
             }
             // Return undefined to allow alternatives to try other branches (e.g., `value?='true' | 'false'`)
             return undefined;
@@ -257,7 +287,7 @@ export class DefaultTextSerializer implements TextSerializer {
                 if (item === undefined) {
                     return undefined;
                 }
-                const itemTokens = this.emitAssignmentValue(assignment.terminal, item, context, options, iteration);
+                const itemTokens = this.emitAssignmentValue(assignment.terminal, item, context, options, feature, iteration);
                 if (itemTokens === undefined) {
                     return undefined;
                 }
@@ -266,7 +296,7 @@ export class DefaultTextSerializer implements TextSerializer {
                 return tokens;
             }
             for (let index = this.getUsage(context, context.node, feature); index < value.length; index++) {
-                const itemTokens = this.emitAssignmentValue(assignment.terminal, value[index], context, options, iteration);
+                const itemTokens = this.emitAssignmentValue(assignment.terminal, value[index], context, options, feature, iteration);
                 if (itemTokens === undefined) {
                     return undefined;
                 }
@@ -278,36 +308,36 @@ export class DefaultTextSerializer implements TextSerializer {
             }
             return tokens;
         }
-        const tokens = this.emitAssignmentValue(assignment.terminal, value, context, options, iteration);
+        const tokens = this.emitAssignmentValue(assignment.terminal, value, context, options, feature, iteration);
         if (tokens !== undefined) {
             this.updateUsage(context, context.node, feature, 1);
         }
         return tokens;
     }
 
-    protected emitAssignmentValue(terminal: AbstractElement, value: unknown, context: EmitContext, options: Required<TextSerializeOptions>, iteration?: IterationContext): string[] | undefined {
+    protected emitAssignmentValue(terminal: AbstractElement, value: unknown, context: EmitContext, options: ResolvedTextSerializeOptions, property: string, iteration?: IterationContext): string[] | undefined {
         if (isCrossReference(terminal)) {
-            return this.emitCrossReference(terminal, value, context, options, iteration);
+            return this.emitCrossReference(terminal, value, context, options, property, iteration);
         }
-        return this.emitTerminal(terminal, value, context, options, iteration);
+        return this.emitTerminal(terminal, value, context, options, property, iteration);
     }
 
-    protected emitTerminal(element: AbstractElement, value: unknown, context: EmitContext, options: Required<TextSerializeOptions>, iteration?: IterationContext): string[] | undefined {
+    protected emitTerminal(element: AbstractElement, value: unknown, context: EmitContext, options: ResolvedTextSerializeOptions, property: string, iteration?: IterationContext): string[] | undefined {
         if (isKeyword(element)) {
             return (value === true || value === element.value) ? [element.value] : undefined;
         }
         if (isAlternatives(element)) {
             return this.emitAlternativesWithPriority(
                 element.elements,
-                alt => this.emitTerminal(alt, value, context, options, iteration),
+                alt => this.emitTerminal(alt, value, context, options, property, iteration),
                 isAstNode(value) ? value.$type : undefined
             );
         }
         if (isGroup(element) || isUnorderedGroup(element)) {
-            return this.emitTerminalGroup(element.elements, value, context, options, iteration);
+            return this.emitTerminalGroup(element.elements, value, context, options, property, iteration);
         }
         if (isRuleCall(element) || isTerminalRuleCall(element)) {
-            return this.emitTerminalRuleCall(element, value, context, options);
+            return this.emitTerminalRuleCall(element, value, context, options, property);
         }
         if (isAction(element)) {
             return [];
@@ -318,10 +348,10 @@ export class DefaultTextSerializer implements TextSerializer {
     /**
      * Emits a group of elements as a terminal value (all children must succeed).
      */
-    protected emitTerminalGroup(elements: readonly AbstractElement[], value: unknown, context: EmitContext, options: Required<TextSerializeOptions>, iteration?: IterationContext): string[] | undefined {
+    protected emitTerminalGroup(elements: readonly AbstractElement[], value: unknown, context: EmitContext, options: ResolvedTextSerializeOptions, property: string, iteration?: IterationContext): string[] | undefined {
         const tokens: string[] = [];
         for (const child of elements) {
-            const childTokens = this.emitTerminal(child, value, context, options, iteration);
+            const childTokens = this.emitTerminal(child, value, context, options, property, iteration);
             if (childTokens === undefined) {
                 return undefined;
             }
@@ -333,7 +363,7 @@ export class DefaultTextSerializer implements TextSerializer {
     /**
      * Emits a rule call within a terminal context (with a value).
      */
-    protected emitTerminalRuleCall(element: RuleCall | TerminalRuleCall, value: unknown, context: EmitContext, options: Required<TextSerializeOptions>): string[] | undefined {
+    protected emitTerminalRuleCall(element: RuleCall | TerminalRuleCall, value: unknown, context: EmitContext, options: ResolvedTextSerializeOptions, property: string): string[] | undefined {
         const rule = element.rule.ref;
         if (!rule) {
             return undefined;
@@ -347,12 +377,12 @@ export class DefaultTextSerializer implements TextSerializer {
                 return this.emitNode(value, context, options, rule);
             }
             if (isDataTypeRule(rule)) {
-                return [this.formatPrimitive(value, rule)];
+                return [this.formatPrimitive(value, rule, context.node, property, options)];
             }
             return undefined;
         }
         if (isTerminalRule(rule)) {
-            return [this.formatPrimitive(value, rule)];
+            return [this.formatPrimitive(value, rule, context.node, property, options)];
         }
         return undefined;
     }
@@ -375,7 +405,7 @@ export class DefaultTextSerializer implements TextSerializer {
      *    Example: `Wrapper: 'wrap' Item;`
      *    Here we search for a property whose type matches the called rule.
      */
-    protected emitUnassignedRuleCall(element: RuleCall | TerminalRuleCall, context: EmitContext, options: Required<TextSerializeOptions>, iteration?: IterationContext): string[] | undefined {
+    protected emitUnassignedRuleCall(element: RuleCall | TerminalRuleCall, context: EmitContext, options: ResolvedTextSerializeOptions, iteration?: IterationContext): string[] | undefined {
         const rule = element.rule.ref;
         if (!rule) {
             return undefined;
@@ -415,12 +445,12 @@ export class DefaultTextSerializer implements TextSerializer {
             if (index !== undefined) {
                 this.updateUsage(context, context.node, feature, index + 1);
             }
-            return [this.formatPrimitive(value, rule)];
+            return [this.formatPrimitive(value, rule, context.node, feature, options)];
         }
         return undefined;
     }
 
-    protected emitCrossReference(crossRef: CrossReference, value: unknown, context: EmitContext, options: Required<TextSerializeOptions>, iteration?: IterationContext): string[] | undefined {
+    protected emitCrossReference(crossRef: CrossReference, value: unknown, context: EmitContext, options: ResolvedTextSerializeOptions, property: string, iteration?: IterationContext): string[] | undefined {
         const targetTerminal = getCrossReferenceTerminal(crossRef) ?? crossRef.terminal;
         if (!targetTerminal) {
             return undefined;
@@ -432,7 +462,7 @@ export class DefaultTextSerializer implements TextSerializer {
         const valuesArray = Array.isArray(referenceValues) ? referenceValues : [referenceValues];
         const tokens: string[] = [];
         for (const item of valuesArray) {
-            const itemTokens = this.emitTerminal(targetTerminal, item, context, options, iteration);
+            const itemTokens = this.emitTerminal(targetTerminal, item, context, options, property, iteration);
             if (itemTokens === undefined) {
                 return undefined;
             }
@@ -441,7 +471,7 @@ export class DefaultTextSerializer implements TextSerializer {
         return tokens;
     }
 
-    protected resolveReferenceValues(value: unknown, options: Required<TextSerializeOptions>): string | string[] | undefined {
+    protected resolveReferenceValues(value: unknown, options: ResolvedTextSerializeOptions): string | string[] | undefined {
         if (!value) {
             return undefined;
         }
@@ -454,7 +484,7 @@ export class DefaultTextSerializer implements TextSerializer {
         return undefined;
     }
 
-    protected resolveReferenceValue(reference: Reference, options: Required<TextSerializeOptions>): string {
+    protected resolveReferenceValue(reference: Reference, options: ResolvedTextSerializeOptions): string {
         if (options.useRefText && reference.$refText) {
             return reference.$refText;
         }
@@ -464,7 +494,18 @@ export class DefaultTextSerializer implements TextSerializer {
         return reference.$refText;
     }
 
-    protected formatPrimitive(value: unknown, rule: { name: string }): string {
+    protected formatPrimitive(value: unknown, rule: { name: string }, node: AstNode, property: string, options: ResolvedTextSerializeOptions): string {
+        // If a custom serializeValue hook is provided, use it
+        if (options.serializeValue) {
+            return options.serializeValue({
+                node,
+                property,
+                value,
+                ruleName: rule.name,
+                languageId: this.languageId
+            });
+        }
+        // Default formatting logic
         if (value instanceof Date) {
             return value.toISOString();
         }

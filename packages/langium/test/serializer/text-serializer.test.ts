@@ -4,10 +4,14 @@
  * terms of the MIT License, which is available in the project root.
  ******************************************************************************/
 
-import type { AstNode } from 'langium';
+import type { AstNode, CstNode, Grammar, LangiumCoreServices } from 'langium';
+import type { AbstractRule } from '../../src/languages/generated/ast.js';
+import type { SerializeValueContext } from '../../src/serializer/text-serializer.js';
+import type { ValueType } from '../../src/parser/value-converter.js';
+import { AstUtils, DefaultValueConverter, GrammarAST } from 'langium';
 import { createServicesForGrammar } from 'langium/grammar';
 import { expandToStringLF } from 'langium/generate';
-import { beforeEach, describe, expect, test } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, test } from 'vitest';
 import { clearDocuments, parseHelper } from 'langium/test';
 
 describe('TextSerializer', async () => {
@@ -535,5 +539,153 @@ describe('TextSerializer Union/Alias Rules', async () => {
         const root = { $type: 'Root', content: typeB };
 
         expect(serializer.serialize(root as AstNode)).toBe('type-b 42');
+    });
+});
+
+/**
+ * Tests for serializeValue hook - custom serialization of terminal/datatype rule values.
+ * Demonstrates escaping keywords with backticks using a custom ValueConverter and serializeValue hook.
+ */
+describe('TextSerializer serializeValue Hook', () => {
+
+    const grammar = expandToStringLF`
+        grammar EscapedIdTest
+
+        entry Model: 'model' name=ID;
+
+        ID returns string: RawId | EscapedId;
+
+        hidden terminal WS: /\\s+/;
+        terminal RawId: /[_a-zA-Z][\\w]*/;
+        terminal EscapedId: /\`[^\`]*\`/;
+    `;
+
+    /**
+     * Custom ValueConverter that strips backticks from EscapedId during parsing.
+     */
+    class EscapedIdValueConverter extends DefaultValueConverter {
+        protected override runConverter(rule: AbstractRule, input: string, cstNode: CstNode): ValueType {
+            if (rule.name === 'EscapedId') {
+                // Strip backticks: `model` → model
+                return input.substring(1, input.length - 1);
+            }
+            return super.runConverter(rule, input, cstNode);
+        }
+    }
+
+    /**
+     * Extracts all keywords from a grammar.
+     */
+    function getAllKeywords(grammarNode: Grammar): Set<string> {
+        return AstUtils.streamAst(grammarNode)
+            .filter(GrammarAST.isKeyword)
+            .map(node => node.value)
+            .toSet();
+    }
+
+    let services: LangiumCoreServices;
+    let parse: ReturnType<typeof parseHelper<AstNode>>;
+    let keywords: Set<string>;
+
+    beforeAll(async () => {
+        services = await createServicesForGrammar({
+            grammar,
+            module: {
+                parser: {
+                    ValueConverter: () => new EscapedIdValueConverter()
+                }
+            }
+        });
+        parse = parseHelper(services);
+        keywords = getAllKeywords(services.Grammar);
+    });
+
+    beforeEach(() => {
+        clearDocuments(services);
+    });
+
+    /**
+     * Helper to serialize with keyword escaping using the serializeValue hook.
+     */
+    function serializeWithEscaping(node: AstNode): string {
+        return services.serializer.TextSerializer.serialize(node, {
+            serializeValue: (ctx: SerializeValueContext) => {
+                if (ctx.ruleName === 'ID' || ctx.ruleName === 'RawId' || ctx.ruleName === 'EscapedId') {
+                    const strValue = String(ctx.value);
+                    if (keywords.has(strValue)) {
+                        return `\`${strValue}\``;
+                    }
+                    return strValue;
+                }
+                return String(ctx.value);
+            }
+        });
+    }
+
+    test('Keywords are correctly extracted from grammar', () => {
+        expect(keywords.has('model')).toBe(true);
+    });
+
+    test('Parse escaped keyword - backticks are stripped', async () => {
+        const result = await parse('model `model`');
+        expect(result.parseResult.parserErrors).toHaveLength(0);
+        expect((result.parseResult.value as unknown as { name: string }).name).toBe('model');
+    });
+
+    test('Parse regular ID - no transformation', async () => {
+        const result = await parse('model sample');
+        expect(result.parseResult.parserErrors).toHaveLength(0);
+        expect((result.parseResult.value as unknown as { name: string }).name).toBe('sample');
+    });
+
+    test('Serialize with serializeValue hook - keyword gets escaped', async () => {
+        const result = await parse('model `model`');
+        expect(result.parseResult.parserErrors).toHaveLength(0);
+
+        const text = serializeWithEscaping(result.parseResult.value);
+        expect(text).toBe('model `model`');
+    });
+
+    test('Serialize with serializeValue hook - non-keyword stays unescaped', async () => {
+        const result = await parse('model sample');
+        expect(result.parseResult.parserErrors).toHaveLength(0);
+
+        const text = serializeWithEscaping(result.parseResult.value);
+        expect(text).toBe('model sample');
+    });
+
+    test('Roundtrip escaped keyword', async () => {
+        const input = 'model `model`';
+        const result1 = await parse(input);
+        expect(result1.parseResult.parserErrors).toHaveLength(0);
+
+        const serialized = serializeWithEscaping(result1.parseResult.value);
+        expect(serialized).toBe(input);
+
+        // Verify it parses back to same AST
+        const result2 = await parse(serialized);
+        expect(result2.parseResult.parserErrors).toHaveLength(0);
+        expect((result2.parseResult.value as unknown as { name: string }).name).toBe('model');
+    });
+
+    test('serializeValue context contains expected properties', async () => {
+        const result = await parse('model test');
+        expect(result.parseResult.parserErrors).toHaveLength(0);
+
+        let capturedContext: SerializeValueContext | undefined;
+        services.serializer.TextSerializer.serialize(result.parseResult.value, {
+            serializeValue: (context: SerializeValueContext) => {
+                capturedContext = context;
+                return String(context.value);
+            }
+        });
+
+        expect(capturedContext).toMatchObject({
+            node: expect.objectContaining({ $type: 'Model' }),
+            property: 'name',
+            value: 'test',
+            ruleName: expect.stringMatching(/ID|RawId|EscapedId/),
+            languageId: 'EscapedIdTest'
+        });
     });
 });
