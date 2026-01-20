@@ -49,54 +49,27 @@ type IterationContext = Map<string, number>;
  *
  * ## Architecture Overview
  *
- * The serializer works by traversing grammar rule definitions and matching them
- * against AST node properties. It produces an array of tokens that are then
- * joined with a separator (default: single space).
+ * The serializer traverses grammar rule definitions and matches them against AST
+ * node properties. It produces an array of tokens joined with a separator (default: space).
  *
  * ### Key Concepts
  *
- * **EmitContext**: Tracks the current serialization state:
- * - `root`: The top-level AST node being serialized
- * - `node`: The current AST node being processed
- * - `usage`: Tracks which array indices have been consumed for each property
+ * **EmitContext**: Tracks serialization state (root node, current node, array index usage).
  *
- * **IterationContext**: Used when serializing repeated groups (with `*` or `+`
- * cardinality) to track which array index to use for each property within
- * an iteration.
+ * **IterationContext**: Tracks array indices within repeated groups (`*` or `+` cardinality).
  *
- * ### Method Responsibilities
+ * **ruleProducibleTypes**: Cache mapping each parser rule to the set of AST types it can
+ * produce (including via actions and nested rule calls). Built once during construction.
  *
- * - `emitNode`: Entry point for serializing an AST node. Finds the grammar rule
- *   for the node's type and delegates to `emitElement`.
+ * ### Method Hierarchy
  *
- * - `emitElement`: Dispatches based on grammar element type (Keyword, Assignment,
- *   RuleCall, Alternatives, Group, etc.). Returns `undefined` if the element
- *   cannot be matched, allowing alternatives to try other branches.
- *
- * - `emitAssignment`: Handles property assignments (`=`, `+=`, `?=`). Reads
- *   the property value from the AST node and delegates to `emitTerminal`.
- *
- * - `emitTerminal`: Handles the right-hand side of assignments - keywords,
- *   rule calls, and alternatives. For AST node values, recursively calls
- *   `emitNode` with the appropriate rule.
- *
- * - `emitUnassignedRuleCall`: Handles rule calls that don't have an assignment
- *   (e.g., fragment rules, or inline type alternatives). Looks up matching
- *   properties or, for union rules, checks if the current node matches.
- *
- * - `emitGroup`: Handles groups with cardinality. For `*` and `+` groups,
- *   determines repetition count from array property lengths.
- *
- * ### Union/Alias Rules
- *
- * A union rule like `Child: ChildA | ChildB` has no assignments - its definition
- * is just alternatives of rule calls. When emitting through such a rule:
- *
- * 1. `emitNode` is called with a ChildA node and the Child rule
- * 2. `emitElement` processes the Alternatives
- * 3. For each alternative (ChildA, ChildB rule calls), `emitUnassignedRuleCall`
- *    checks if the current node's type matches the rule's type
- * 4. When ChildA matches, the node is emitted using the ChildA rule
+ * ```
+ * serialize() → emitNode() → emitElement()
+ *                              ├─ emitAssignment() → emitTerminal()
+ *                              ├─ emitUnassignedRuleCall()
+ *                              ├─ emitAlternativesWithPriority()
+ *                              └─ emitGroup() → emitGroupOnce() / emitGroupRepeated()
+ * ```
  *
  * ### Return Value Convention
  *
@@ -104,8 +77,8 @@ type IterationContext = Map<string, number>;
  * - `string[]`: Successfully emitted tokens (may be empty for optional elements)
  * - `undefined`: Element could not be matched (allows backtracking in alternatives)
  *
- * Optional elements (`?`, `*` cardinality, `?=` operator) return `[]` instead
- * of `undefined` when their content is missing, since absence is valid.
+ * The `optionalResult()` helper handles the common pattern of returning `[]` for
+ * optional cardinality or `undefined` otherwise.
  */
 export class DefaultTextSerializer implements TextSerializer {
 
@@ -113,12 +86,15 @@ export class DefaultTextSerializer implements TextSerializer {
     protected readonly nameProvider: NameProvider;
     protected readonly astReflection: AstReflection;
     protected readonly ruleTargets = new Map<string, RuleTarget>();
+    /** Cache of types each parser rule can produce, built once during construction. */
+    protected readonly ruleProducibleTypes = new Map<ParserRule, Set<string>>();
 
     constructor(services: LangiumCoreServices) {
         this.grammar = services.Grammar;
         this.nameProvider = services.references.NameProvider;
         this.astReflection = services.shared.AstReflection;
         this.collectRuleTargets();
+        this.buildRuleProducibleTypes();
     }
 
     serialize(node: AstNode, options?: TextSerializeOptions): string {
@@ -156,58 +132,23 @@ export class DefaultTextSerializer implements TextSerializer {
             return [element.value];
         }
         if (isAssignment(element)) {
-            const tokens = this.emitAssignment(element, context, options, iteration);
-            if (tokens !== undefined) {
-                return tokens;
-            }
-            // Return undefined for ?= to allow Alternatives to try other branches
-            // Groups will handle ?= specially (treat undefined as optional)
-            return isOptionalCardinality(element.cardinality, element) ? [] : undefined;
+            return this.emitAssignment(element, context, options, iteration) ?? this.optionalResult(element);
         }
         if (isRuleCall(element) || isTerminalRuleCall(element)) {
-            const tokens = this.emitUnassignedRuleCall(element, context, options, iteration);
-            if (tokens !== undefined) {
-                return tokens;
-            }
-            return isOptionalCardinality(element.cardinality, element) ? [] : undefined;
+            return this.emitUnassignedRuleCall(element, context, options, iteration) ?? this.optionalResult(element);
         }
         if (isCrossReference(element)) {
-            const tokens = this.emitCrossReference(element, undefined, context, options, iteration);
-            if (tokens !== undefined) {
-                return tokens;
-            }
-            return isOptionalCardinality(element.cardinality, element) ? [] : undefined;
+            return this.emitCrossReference(element, undefined, context, options, iteration) ?? this.optionalResult(element);
         }
         if (isAlternatives(element)) {
-            // Two-pass approach: prefer exact type matches over subtype matches.
-            // First pass: try alternatives where the rule produces exactly the current node type
-            // This handles cases like `{infer SomeType}` actions within rules.
-            for (const alternative of element.elements) {
-                if (isRuleCall(alternative)) {
-                    const rule = alternative.rule.ref;
-                    if (isParserRule(rule) && this.ruleProducesType(rule, context.node.$type)) {
-                        const tokens = this.emitElement(alternative, context, options, iteration);
-                        if (tokens !== undefined) {
-                            return tokens;
-                        }
-                    }
-                }
-            }
-            // Second pass: try all alternatives
-            for (const alternative of element.elements) {
-                const tokens = this.emitElement(alternative, context, options, iteration);
-                if (tokens !== undefined) {
-                    return tokens;
-                }
-            }
-            return undefined;
+            return this.emitAlternativesWithPriority(
+                element.elements,
+                alt => this.emitElement(alt, context, options, iteration),
+                context.node.$type
+            );
         }
         if (isGroup(element) || isUnorderedGroup(element)) {
-            const tokens = this.emitGroup(element.elements, element.cardinality, context, options, iteration);
-            if (tokens !== undefined) {
-                return tokens;
-            }
-            return isOptionalCardinality(element.cardinality, element) ? [] : undefined;
+            return this.emitGroup(element.elements, element.cardinality, context, options, iteration) ?? this.optionalResult(element);
         }
         if (isAction(element)) {
             return [];
@@ -220,36 +161,49 @@ export class DefaultTextSerializer implements TextSerializer {
         if (repetitionCount === 0) {
             return cardinality === '+' ? undefined : [];
         }
-        const tokens: string[] = [];
         if (!isArrayCardinality(cardinality)) {
-            const assignmentCounts = this.collectAssignmentCounts(elements);
-            for (const child of elements) {
-                if (!iteration && isAssignment(child) && child.operator === '+=' && (assignmentCounts.get(child.feature) ?? 0) > 1) {
-                    const value = (context.node as GenericAstNode)[child.feature];
-                    if (Array.isArray(value)) {
-                        const index = this.getUsage(context, context.node, child.feature);
-                        const iterationContext = new Map<string, number>(iteration ?? []);
-                        iterationContext.set(child.feature, index);
-                        const childTokens = this.emitElement(child, context, options, iterationContext);
-                        if (childTokens === undefined) {
-                            return undefined;
-                        }
-                        tokens.push(...childTokens);
-                        continue;
-                    }
-                }
-                const childTokens = this.emitElement(child, context, options, iteration);
-                if (childTokens === undefined) {
-                    // Treat ?= assignments as optional in groups
-                    if (isAssignment(child) && child.operator === '?=') {
-                        continue;
-                    }
-                    return undefined;
-                }
-                tokens.push(...childTokens);
-            }
-            return tokens;
+            return this.emitGroupOnce(elements, context, options, iteration);
         }
+        return this.emitGroupRepeated(elements, repetitionCount, context, options, iteration);
+    }
+
+    /**
+     * Emits a group once (non-array cardinality).
+     * Special handling for `+=` operators that appear multiple times in the same group.
+     */
+    protected emitGroupOnce(elements: AbstractElement[], context: EmitContext, options: Required<TextSerializeOptions>, iteration?: IterationContext): string[] | undefined {
+        const tokens: string[] = [];
+        const assignmentCounts = this.collectAssignmentCounts(elements);
+        for (const child of elements) {
+            // Handle multiple += assignments to the same feature within a non-repeated group
+            if (!iteration && isAssignment(child) && child.operator === '+=' && (assignmentCounts.get(child.feature) ?? 0) > 1) {
+                const value = (context.node as GenericAstNode)[child.feature];
+                if (Array.isArray(value)) {
+                    const index = this.getUsage(context, context.node, child.feature);
+                    const iterationContext = new Map<string, number>(iteration ?? []);
+                    iterationContext.set(child.feature, index);
+                    const childTokens = this.emitElement(child, context, options, iterationContext);
+                    if (childTokens === undefined) {
+                        return undefined;
+                    }
+                    tokens.push(...childTokens);
+                    continue;
+                }
+            }
+            const childTokens = this.emitGroupChild(child, context, options, iteration);
+            if (childTokens === undefined) {
+                return undefined;
+            }
+            tokens.push(...childTokens);
+        }
+        return tokens;
+    }
+
+    /**
+     * Emits a group multiple times (array cardinality `*` or `+`).
+     */
+    protected emitGroupRepeated(elements: AbstractElement[], repetitionCount: number, context: EmitContext, options: Required<TextSerializeOptions>, iteration?: IterationContext): string[] | undefined {
+        const tokens: string[] = [];
         const arrayAssignments = this.collectArrayAssignments(elements, context.node, iteration);
         const baseUsage = new Map<string, number>();
         for (const { feature } of arrayAssignments) {
@@ -258,20 +212,26 @@ export class DefaultTextSerializer implements TextSerializer {
         for (let index = 0; index < repetitionCount; index++) {
             const iterationContext = new Map<string, number>(iteration ?? []);
             for (const { feature } of arrayAssignments) {
-                const base = baseUsage.get(feature) ?? 0;
-                iterationContext.set(feature, base + index);
+                iterationContext.set(feature, (baseUsage.get(feature) ?? 0) + index);
             }
             for (const child of elements) {
-                const childTokens = this.emitElement(child, context, options, iterationContext);
+                const childTokens = this.emitGroupChild(child, context, options, iterationContext);
                 if (childTokens === undefined) {
-                    // Treat ?= assignments as optional in groups
-                    if (isAssignment(child) && child.operator === '?=') {
-                        continue;
-                    }
                     return undefined;
                 }
                 tokens.push(...childTokens);
             }
+        }
+        return tokens;
+    }
+
+    /**
+     * Emits a single child element within a group, treating `?=` assignments as optional.
+     */
+    protected emitGroupChild(child: AbstractElement, context: EmitContext, options: Required<TextSerializeOptions>, iteration?: IterationContext): string[] | undefined {
+        const tokens = this.emitElement(child, context, options, iteration);
+        if (tokens === undefined && isAssignment(child) && child.operator === '?=') {
+            return []; // ?= assignments are optional in groups
         }
         return tokens;
     }
@@ -334,78 +294,65 @@ export class DefaultTextSerializer implements TextSerializer {
 
     protected emitTerminal(element: AbstractElement, value: unknown, context: EmitContext, options: Required<TextSerializeOptions>, iteration?: IterationContext): string[] | undefined {
         if (isKeyword(element)) {
-            if (value === true || value === element.value) {
-                return [element.value];
-            }
-            return undefined;
+            return (value === true || value === element.value) ? [element.value] : undefined;
         }
         if (isAlternatives(element)) {
-            // Two-pass approach: prefer exact type matches over subtype matches.
-            // This ensures that when we have alternatives like (LoggingAnnotation | GenericAnnotation),
-            // a GenericAnnotation node will match the GenericAnnotation rule exactly,
-            // rather than potentially matching a parent type first.
-            if (isAstNode(value)) {
-                // First pass: try exact type matches only
-                for (const alternative of element.elements) {
-                    if (isRuleCall(alternative)) {
-                        const rule = alternative.rule.ref;
-                        if (isParserRule(rule) && this.ruleProducesType(rule, value.$type)) {
-                            const tokens = this.emitTerminal(alternative, value, context, options, iteration);
-                            if (tokens !== undefined) {
-                                return tokens;
-                            }
-                        }
-                    }
-                }
-            }
-            // Second pass: try all alternatives (including subtype matches and non-RuleCall elements)
-            for (const alternative of element.elements) {
-                const tokens = this.emitTerminal(alternative, value, context, options, iteration);
-                if (tokens !== undefined) {
-                    return tokens;
-                }
-            }
-            return undefined;
+            return this.emitAlternativesWithPriority(
+                element.elements,
+                alt => this.emitTerminal(alt, value, context, options, iteration),
+                isAstNode(value) ? value.$type : undefined
+            );
         }
         if (isGroup(element) || isUnorderedGroup(element)) {
-            const tokens: string[] = [];
-            for (const child of element.elements) {
-                const childTokens = this.emitTerminal(child, value, context, options, iteration);
-                if (childTokens === undefined) {
-                    return undefined;
-                }
-                tokens.push(...childTokens);
-            }
-            return tokens;
+            return this.emitTerminalGroup(element.elements, value, context, options, iteration);
         }
         if (isRuleCall(element) || isTerminalRuleCall(element)) {
-            const rule = element.rule.ref;
-            if (!rule) {
-                return undefined;
-            }
-            if (isParserRule(rule)) {
-                if (isAstNode(value)) {
-                    // Check if this rule can produce the AST node's type.
-                    // This is important when processing alternatives - we should only
-                    // emit through a rule if the node's type can be produced by that rule.
-                    // We use ruleProducesType to handle cases where the type relationship
-                    // is implied by grammar structure rather than explicit interface inheritance.
-                    if (!this.ruleProducesType(rule, value.$type)) {
-                        return undefined;
-                    }
-                    return this.emitNode(value, context, options, rule);
-                }
-                if (isDataTypeRule(rule)) {
-                    return [this.formatPrimitive(value, rule)];
-                }
-                return undefined;
-            }
-            if (isTerminalRule(rule)) {
-                return [this.formatPrimitive(value, rule)];
-            }
+            return this.emitTerminalRuleCall(element, value, context, options);
         }
         if (isAction(element)) {
             return [];
+        }
+        return undefined;
+    }
+
+    /**
+     * Emits a group of elements as a terminal value (all children must succeed).
+     */
+    protected emitTerminalGroup(elements: readonly AbstractElement[], value: unknown, context: EmitContext, options: Required<TextSerializeOptions>, iteration?: IterationContext): string[] | undefined {
+        const tokens: string[] = [];
+        for (const child of elements) {
+            const childTokens = this.emitTerminal(child, value, context, options, iteration);
+            if (childTokens === undefined) {
+                return undefined;
+            }
+            tokens.push(...childTokens);
+        }
+        return tokens;
+    }
+
+    /**
+     * Emits a rule call within a terminal context (with a value).
+     */
+    protected emitTerminalRuleCall(element: RuleCall | TerminalRuleCall, value: unknown, context: EmitContext, options: Required<TextSerializeOptions>): string[] | undefined {
+        const rule = element.rule.ref;
+        if (!rule) {
+            return undefined;
+        }
+        if (isParserRule(rule)) {
+            if (isAstNode(value)) {
+                // Only emit through this rule if it can produce the value's type
+                if (!this.ruleProducesType(rule, value.$type)) {
+                    return undefined;
+                }
+                return this.emitNode(value, context, options, rule);
+            }
+            if (isDataTypeRule(rule)) {
+                return [this.formatPrimitive(value, rule)];
+            }
+            return undefined;
+        }
+        if (isTerminalRule(rule)) {
+            return [this.formatPrimitive(value, rule)];
         }
         return undefined;
     }
@@ -657,56 +604,97 @@ export class DefaultTextSerializer implements TextSerializer {
     }
 
     /**
-     * Checks if a parser rule can produce an AST node of the given type.
-     * This includes checking:
-     * 1. The rule's declared return type (via `returns` or `infers`) - exact match only
-     * 2. Any action types defined within the rule (e.g., `{infer SomeType}`)
-     * 3. Any rule calls within the definition that could produce the type
-     * 
-     * Note: We only use exact match for the rule's declared type, not subtype matching.
-     * This is because a rule like `ApiComplexType returns ApiType: A | B | C` cannot
-     * produce an `ApiUnknownType` node directly - we need to check if any of its
-     * alternatives can produce the type.
+     * Helper for emitting alternatives with priority given to exact type matches.
+     * Uses a two-pass approach: first tries alternatives where the rule produces
+     * exactly the target type, then falls back to trying all alternatives.
+     *
+     * @param alternatives The alternative elements to try
+     * @param emitFn Function to emit a single alternative, returns tokens or undefined
+     * @param targetType Optional type to prioritize (for exact matches first)
      */
-    protected ruleProducesType(rule: ParserRule, nodeType: string): boolean {
-        // Check if the rule's declared type exactly matches
-        const ruleType = getRuleTypeName(rule);
-        if (nodeType === ruleType) {
-            return true;
+    protected emitAlternativesWithPriority(
+        alternatives: readonly AbstractElement[],
+        emitFn: (element: AbstractElement) => string[] | undefined,
+        targetType?: string
+    ): string[] | undefined {
+        // First pass: prioritize exact type matches
+        if (targetType) {
+            for (const alternative of alternatives) {
+                if (isRuleCall(alternative)) {
+                    const rule = alternative.rule.ref;
+                    if (isParserRule(rule) && this.ruleProducesType(rule, targetType)) {
+                        const tokens = emitFn(alternative);
+                        if (tokens !== undefined) {
+                            return tokens;
+                        }
+                    }
+                }
+            }
         }
-        // Check if any element within the rule produces this type (actions or nested rule calls)
-        return this.elementProducesType(rule.definition, nodeType, new Set());
+        // Second pass: try all alternatives
+        for (const alternative of alternatives) {
+            const tokens = emitFn(alternative);
+            if (tokens !== undefined) {
+                return tokens;
+            }
+        }
+        return undefined;
     }
 
     /**
-     * Recursively checks if any element within the grammar element can produce the given type.
-     * This includes actions and rule calls that might produce the target type.
+     * Returns empty array for optional elements, undefined otherwise.
+     * Used to signal that optional content is validly absent vs. matching failed.
      */
-    protected elementProducesType(element: AbstractElement, nodeType: string, visited: Set<ParserRule>): boolean {
+    protected optionalResult(element: AbstractElement): string[] | undefined {
+        return isOptionalCardinality(element.cardinality, element) ? [] : undefined;
+    }
+
+    /**
+     * Checks if a parser rule can produce an AST node of the given type.
+     * Results are cached in `ruleProducibleTypes` for performance.
+     */
+    protected ruleProducesType(rule: ParserRule, nodeType: string): boolean {
+        return this.ruleProducibleTypes.get(rule)?.has(nodeType) ?? false;
+    }
+
+    /**
+     * Builds the cache of producible types for each parser rule.
+     * Called once during construction after collectRuleTargets().
+     */
+    protected buildRuleProducibleTypes(): void {
+        const parserRules = this.grammar.rules.filter(isParserRule);
+        for (const rule of parserRules) {
+            const types = new Set<string>();
+            this.collectProducibleTypes(rule.definition, types, new Set());
+            // Add the rule's own declared type
+            types.add(getRuleTypeName(rule));
+            this.ruleProducibleTypes.set(rule, types);
+        }
+    }
+
+    /**
+     * Recursively collects all types that can be produced by a grammar element.
+     */
+    protected collectProducibleTypes(element: AbstractElement, types: Set<string>, visited: Set<ParserRule>): void {
         if (isAction(element)) {
             const actionType = getActionType(element);
-            if (actionType === nodeType) {
-                return true;
+            if (actionType) {
+                types.add(actionType);
             }
         }
         if (isRuleCall(element)) {
             const rule = element.rule.ref;
             if (isParserRule(rule) && !visited.has(rule)) {
                 visited.add(rule);
-                const ruleType = getRuleTypeName(rule);
-                if (nodeType === ruleType) {
-                    return true;
-                }
-                // Recursively check if this rule can produce the type
-                if (this.elementProducesType(rule.definition, nodeType, visited)) {
-                    return true;
-                }
+                types.add(getRuleTypeName(rule));
+                this.collectProducibleTypes(rule.definition, types, visited);
             }
         }
         if (isAlternatives(element) || isGroup(element) || isUnorderedGroup(element)) {
-            return element.elements.some(child => this.elementProducesType(child, nodeType, visited));
+            for (const child of element.elements) {
+                this.collectProducibleTypes(child, types, visited);
+            }
         }
-        return false;
     }
 
     protected getPropertyNames(node: AstNode): string[] {
