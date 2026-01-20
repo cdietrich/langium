@@ -320,3 +320,37 @@ describe('TextSerializer Union Type Arrays', async () => {
         expect(text).toBe('model MyModel { a first b second }');
     });
 });
+
+describe('TextSerializer Fragment Rules', async () => {
+
+    const grammar = expandToStringLF`
+        grammar FragmentTest
+
+        entry Model: Visibility 'model' name=ID '{' children+=Child* '}';
+        Child: Visibility 'element' name=ID;
+        fragment Visibility: visibility=('public'|'private'|'protected')?;
+
+        hidden terminal WS: /\\s+/;
+        terminal ID: /[_a-zA-Z][\\w]*/;
+    `;
+
+    const services = await createServicesForGrammar({ grammar });
+    const serializer = services.serializer.TextSerializer;
+
+    test('Serialize model with visibility fragment', () => {
+        const model = { $type: 'Model', visibility: 'public', name: 'MyModel', children: [] };
+        expect(serializer.serialize(model as AstNode)).toBe('public model MyModel { }');
+    });
+
+    test('Serialize model without visibility', () => {
+        const model = { $type: 'Model', name: 'MyModel', children: [] };
+        expect(serializer.serialize(model as AstNode)).toBe('model MyModel { }');
+    });
+
+    test('Serialize children with visibility fragment', () => {
+        const child1 = { $type: 'Child', visibility: 'private', name: 'First' };
+        const child2 = { $type: 'Child', name: 'Second' };
+        const model = { $type: 'Model', visibility: 'public', name: 'MyModel', children: [child1, child2] };
+        expect(serializer.serialize(model as AstNode)).toBe('public model MyModel { private element First element Second }');
+    });
+});

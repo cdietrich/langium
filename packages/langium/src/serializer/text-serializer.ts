@@ -299,6 +299,10 @@ export class DefaultTextSerializer implements TextSerializer {
             return undefined;
         }
         if (isParserRule(rule)) {
+            // Handle fragment rules by inlining their definition
+            if (rule.fragment) {
+                return this.emitElement(rule.definition, context, options, iteration);
+            }
             const ruleType = getRuleTypeName(rule);
             const candidate = this.findAstProperty(context, context.node, ruleType, iteration);
             if (!candidate) {
