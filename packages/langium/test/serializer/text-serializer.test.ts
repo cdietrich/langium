@@ -292,3 +292,31 @@ describe('TextSerializer Roundtrip Tests', async () => {
         await expectRoundtrip('item a , item b , item c', { space: '\n' });
     });
 });
+
+describe('TextSerializer Union Type Arrays', async () => {
+
+    const grammar = expandToStringLF`
+        grammar UnionTypeTest
+
+        entry Container: 'model' name=ID '{' children+=Child* '}';
+        Child: ChildA | ChildB;
+        ChildA: 'a' name=ID;
+        ChildB: 'b' name=ID;
+
+        hidden terminal WS: /\\s+/;
+        terminal ID: /[_a-zA-Z][\\w]*/;
+    `;
+
+    const services = await createServicesForGrammar({ grammar });
+    const serializer = services.serializer.TextSerializer;
+
+    test('Serialize array with union type children', () => {
+        const childA = { $type: 'ChildA', name: 'first' };
+        const childB = { $type: 'ChildB', name: 'second' };
+        const container = { $type: 'Container', name: 'MyModel', children: [childA, childB] };
+
+        const text = serializer.serialize(container as AstNode);
+
+        expect(text).toBe('model MyModel { a first b second }');
+    });
+});
