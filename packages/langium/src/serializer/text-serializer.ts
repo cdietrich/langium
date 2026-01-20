@@ -7,7 +7,7 @@
 import type { LangiumCoreServices } from '../services.js';
 import type { Grammar, AbstractElement, ParserRule, Assignment, RuleCall, TerminalRuleCall, CrossReference } from '../languages/generated/ast.js';
 import { isAction, isAlternatives, isAssignment, isCrossReference, isGroup, isKeyword, isParserRule, isRuleCall, isTerminalRule, isTerminalRuleCall, isUnorderedGroup } from '../languages/generated/ast.js';
-import type { AstNode, AstReflection, GenericAstNode, Reference } from '../syntax-tree.js';
+import type { AstNode, AstReflection, GenericAstNode, Reference, RootCstNode } from '../syntax-tree.js';
 import { isAstNode, isMultiReference, isReference } from '../syntax-tree.js';
 import type { NameProvider } from '../references/name-provider.js';
 import {
@@ -19,6 +19,7 @@ import {
     isOptionalCardinality,
     isDataTypeRule
 } from '../utils/grammar-utils.js';
+import { SerializationCstBuilder } from './serialization-cst-builder.js';
 
 /**
  * Context passed to the serializeValue hook for customizing primitive value serialization.
@@ -46,6 +47,16 @@ export interface TextSerializeOptions {
 }
 
 /**
+ * Result of serialization that includes CST information.
+ */
+export interface SerializationResult {
+    /** The serialized text */
+    text: string;
+    /** The root CST node (if CST building was requested) */
+    cstNode: RootCstNode;
+}
+
+/**
  * Internal resolved options type with required defaults but optional hook.
  */
 interface ResolvedTextSerializeOptions {
@@ -56,12 +67,22 @@ interface ResolvedTextSerializeOptions {
 
 export interface TextSerializer {
     serialize(node: AstNode, options?: TextSerializeOptions): string;
+    /**
+     * Serializes an AST node to text and builds a CST during serialization.
+     * The CST is linked to the original AST nodes via `$cstNode` property.
+     * @param node The AST node to serialize
+     * @param options Serialization options
+     * @returns The serialized text and the root CST node
+     */
+    serializeWithCst(node: AstNode, options?: TextSerializeOptions): SerializationResult;
 }
 
 interface EmitContext {
     root: AstNode;
     node: AstNode;
     usage: WeakMap<AstNode, Map<string, number>>;
+    /** CST builder for building CST during serialization (optional) */
+    cstBuilder?: SerializationCstBuilder;
 }
 
 type RuleTarget = {
@@ -140,6 +161,28 @@ export class DefaultTextSerializer implements TextSerializer {
         return tokens.join(resolvedOptions.space).trim();
     }
 
+    serializeWithCst(node: AstNode, options?: TextSerializeOptions): SerializationResult {
+        const resolvedOptions = {
+            space: ' ',
+            useRefText: true,
+            ...options
+        };
+        const cstBuilder = new SerializationCstBuilder();
+        cstBuilder.beginDocument(resolvedOptions.space);
+
+        const tokens = this.emitNode(node, {
+            root: node,
+            node,
+            usage: new WeakMap(),
+            cstBuilder
+        }, resolvedOptions);
+
+        const text = tokens.join(resolvedOptions.space).trim();
+        const cstNode = cstBuilder.endDocument(text);
+
+        return { text, cstNode };
+    }
+
     protected emitNode(node: AstNode, context: EmitContext, options: ResolvedTextSerializeOptions, rule?: ParserRule): string[] {
         const targetRule = rule ?? this.ruleTargets.get(node.$type)?.rule;
         if (!targetRule) {
@@ -149,7 +192,19 @@ export class DefaultTextSerializer implements TextSerializer {
             ...context,
             node
         };
+
+        // Begin CST node for this AST node (use rule definition as grammarSource)
+        if (context.cstBuilder) {
+            context.cstBuilder.beginNode(targetRule.definition, node);
+        }
+
         const tokens = this.emitElement(targetRule.definition, updatedContext, options);
+
+        // End CST node
+        if (context.cstBuilder) {
+            context.cstBuilder.endNode();
+        }
+
         if (!tokens) {
             throw new Error(`Failed to serialize AST node of type '${node.$type}'.`);
         }
@@ -158,6 +213,10 @@ export class DefaultTextSerializer implements TextSerializer {
 
     protected emitElement(element: AbstractElement, context: EmitContext, options: ResolvedTextSerializeOptions, iteration?: IterationContext): string[] | undefined {
         if (isKeyword(element)) {
+            // Add CST leaf node for keyword
+            if (context.cstBuilder) {
+                context.cstBuilder.addToken(element.value, element);
+            }
             return [element.value];
         }
         if (isAssignment(element)) {
@@ -174,7 +233,8 @@ export class DefaultTextSerializer implements TextSerializer {
             return this.emitAlternativesWithPriority(
                 element.elements,
                 alt => this.emitElement(alt, context, options, iteration),
-                context.node.$type
+                context.node.$type,
+                context
             );
         }
         if (isGroup(element) || isUnorderedGroup(element)) {
@@ -200,8 +260,12 @@ export class DefaultTextSerializer implements TextSerializer {
     /**
      * Emits a group once (non-array cardinality).
      * Special handling for `+=` operators that appear multiple times in the same group.
+     * Saves CST state before processing and restores on failure to support backtracking.
      */
     protected emitGroupOnce(elements: AbstractElement[], context: EmitContext, options: ResolvedTextSerializeOptions, iteration?: IterationContext): string[] | undefined {
+        // Save CST state before processing the group
+        const savedState = context.cstBuilder?.saveState();
+
         const tokens: string[] = [];
         const assignmentCounts = this.collectAssignmentCounts(elements);
         for (const child of elements) {
@@ -214,6 +278,10 @@ export class DefaultTextSerializer implements TextSerializer {
                     iterationContext.set(child.feature, index);
                     const childTokens = this.emitElement(child, context, options, iterationContext);
                     if (childTokens === undefined) {
+                        // Restore CST state on failure
+                        if (savedState) {
+                            context.cstBuilder?.restoreState(savedState);
+                        }
                         return undefined;
                     }
                     tokens.push(...childTokens);
@@ -222,6 +290,10 @@ export class DefaultTextSerializer implements TextSerializer {
             }
             const childTokens = this.emitGroupChild(child, context, options, iteration);
             if (childTokens === undefined) {
+                // Restore CST state on failure
+                if (savedState) {
+                    context.cstBuilder?.restoreState(savedState);
+                }
                 return undefined;
             }
             tokens.push(...childTokens);
@@ -324,13 +396,21 @@ export class DefaultTextSerializer implements TextSerializer {
 
     protected emitTerminal(element: AbstractElement, value: unknown, context: EmitContext, options: ResolvedTextSerializeOptions, property: string, iteration?: IterationContext): string[] | undefined {
         if (isKeyword(element)) {
-            return (value === true || value === element.value) ? [element.value] : undefined;
+            if (value === true || value === element.value) {
+                // Add CST leaf node for keyword
+                if (context.cstBuilder) {
+                    context.cstBuilder.addToken(element.value, element);
+                }
+                return [element.value];
+            }
+            return undefined;
         }
         if (isAlternatives(element)) {
             return this.emitAlternativesWithPriority(
                 element.elements,
                 alt => this.emitTerminal(alt, value, context, options, property, iteration),
-                isAstNode(value) ? value.$type : undefined
+                isAstNode(value) ? value.$type : undefined,
+                context
             );
         }
         if (isGroup(element) || isUnorderedGroup(element)) {
@@ -377,12 +457,22 @@ export class DefaultTextSerializer implements TextSerializer {
                 return this.emitNode(value, context, options, rule);
             }
             if (isDataTypeRule(rule)) {
-                return [this.formatPrimitive(value, rule, context.node, property, options)];
+                const text = this.formatPrimitive(value, rule, context.node, property, options);
+                // Add CST leaf node for datatype rule value
+                if (context.cstBuilder) {
+                    context.cstBuilder.addToken(text, element);
+                }
+                return [text];
             }
             return undefined;
         }
         if (isTerminalRule(rule)) {
-            return [this.formatPrimitive(value, rule, context.node, property, options)];
+            const text = this.formatPrimitive(value, rule, context.node, property, options);
+            // Add CST leaf node for terminal rule value
+            if (context.cstBuilder) {
+                context.cstBuilder.addToken(text, element);
+            }
+            return [text];
         }
         return undefined;
     }
@@ -445,7 +535,12 @@ export class DefaultTextSerializer implements TextSerializer {
             if (index !== undefined) {
                 this.updateUsage(context, context.node, feature, index + 1);
             }
-            return [this.formatPrimitive(value, rule, context.node, feature, options)];
+            const text = this.formatPrimitive(value, rule, context.node, feature, options);
+            // Add CST leaf node for unassigned terminal rule value
+            if (context.cstBuilder) {
+                context.cstBuilder.addToken(text, element);
+            }
+            return [text];
         }
         return undefined;
     }
@@ -648,15 +743,18 @@ export class DefaultTextSerializer implements TextSerializer {
      * Helper for emitting alternatives with priority given to exact type matches.
      * Uses a two-pass approach: first tries alternatives where the rule produces
      * exactly the target type, then falls back to trying all alternatives.
+     * Saves CST state before each attempt and restores on failure.
      *
      * @param alternatives The alternative elements to try
      * @param emitFn Function to emit a single alternative, returns tokens or undefined
      * @param targetType Optional type to prioritize (for exact matches first)
+     * @param context Optional emit context for CST state management
      */
     protected emitAlternativesWithPriority(
         alternatives: readonly AbstractElement[],
         emitFn: (element: AbstractElement) => string[] | undefined,
-        targetType?: string
+        targetType?: string,
+        context?: EmitContext
     ): string[] | undefined {
         // First pass: prioritize exact type matches
         if (targetType) {
@@ -664,9 +762,14 @@ export class DefaultTextSerializer implements TextSerializer {
                 if (isRuleCall(alternative)) {
                     const rule = alternative.rule.ref;
                     if (isParserRule(rule) && this.ruleProducesType(rule, targetType)) {
+                        const savedState = context?.cstBuilder?.saveState();
                         const tokens = emitFn(alternative);
                         if (tokens !== undefined) {
                             return tokens;
+                        }
+                        // Restore CST state on failure
+                        if (savedState) {
+                            context?.cstBuilder?.restoreState(savedState);
                         }
                     }
                 }
@@ -674,9 +777,14 @@ export class DefaultTextSerializer implements TextSerializer {
         }
         // Second pass: try all alternatives
         for (const alternative of alternatives) {
+            const savedState = context?.cstBuilder?.saveState();
             const tokens = emitFn(alternative);
             if (tokens !== undefined) {
                 return tokens;
+            }
+            // Restore CST state on failure
+            if (savedState) {
+                context?.cstBuilder?.restoreState(savedState);
             }
         }
         return undefined;

@@ -689,3 +689,149 @@ describe('TextSerializer serializeValue Hook', () => {
         });
     });
 });
+
+/**
+ * Tests for serializeWithCst - building CST during serialization.
+ */
+describe('TextSerializer serializeWithCst', async () => {
+
+    const grammar = expandToStringLF`
+        grammar CstBuildingTest
+
+        entry Model: 'model' name=ID '{' items+=Item* '}';
+
+        Item: 'item' name=ID ('value' value=INT)?;
+
+        hidden terminal WS: /\\s+/;
+        terminal ID: /[_a-zA-Z][\\w]*/;
+        terminal INT returns number: /[0-9]+/;
+    `;
+
+    const services = await createServicesForGrammar({ grammar });
+    const serializer = services.serializer.TextSerializer;
+
+    beforeEach(() => {
+        clearDocuments(services);
+    });
+
+    /**
+     * Helper to collect non-hidden leaf node texts from a CST.
+     */
+    function collectLeafTexts(node: CstNode): string[] {
+        if ('content' in node) {
+            return (node as { content: CstNode[] }).content.flatMap(c => collectLeafTexts(c));
+        }
+        return node.hidden ? [] : [node.text];
+    }
+
+    test('serializeWithCst returns text and CST node', () => {
+        const model = { $type: 'Model', name: 'MyModel', items: [] };
+
+        const result = serializer.serializeWithCst(model as AstNode);
+
+        expect(result.text).toBe('model MyModel { }');
+        expect(result.cstNode).toBeDefined();
+        expect(result.cstNode.fullText).toBe('model MyModel { }');
+    });
+
+    test('CST leaf texts joined equal serialized text - single item', () => {
+        const item1 = { $type: 'Item', name: 'first' };
+        const model = { $type: 'Model', name: 'MyModel', items: [item1] };
+
+        const result = serializer.serializeWithCst(model as AstNode);
+        const leafTexts = collectLeafTexts(result.cstNode);
+
+        expect(leafTexts.join(' ')).toBe(result.text);
+    });
+
+    test('CST leaf texts joined equal serialized text - multiple items', () => {
+        const item1 = { $type: 'Item', name: 'first' };
+        const item2 = { $type: 'Item', name: 'second', value: 42 };
+        const model = { $type: 'Model', name: 'MyModel', items: [item1, item2] };
+
+        const result = serializer.serializeWithCst(model as AstNode);
+        const leafTexts = collectLeafTexts(result.cstNode);
+
+        expect(leafTexts.join(' ')).toBe(result.text);
+    });
+
+    test('AST nodes have $cstNode linked after serialization', () => {
+        const item = { $type: 'Item', name: 'test' };
+        const model = { $type: 'Model', name: 'MyModel', items: [item] } as AstNode;
+
+        serializer.serializeWithCst(model);
+
+        expect(model.$cstNode).toBeDefined();
+        expect((item as AstNode).$cstNode).toBeDefined();
+    });
+
+    test('CST node has correct offset and length', () => {
+        const model = { $type: 'Model', name: 'MyModel', items: [] };
+
+        const result = serializer.serializeWithCst(model as AstNode);
+
+        // Root CST node should span the entire text
+        expect(result.cstNode.offset).toBe(0);
+        expect(result.cstNode.length).toBe(result.text.length);
+    });
+
+    test('CST contains hidden whitespace nodes', () => {
+        const model = { $type: 'Model', name: 'MyModel', items: [] };
+
+        const result = serializer.serializeWithCst(model as AstNode);
+
+        // Count hidden nodes (whitespace separators)
+        function countHiddenNodes(node: CstNode): number {
+            if ('content' in node) {
+                return (node as { content: CstNode[] }).content.reduce((sum, c) => sum + countHiddenNodes(c), 0);
+            }
+            return node.hidden ? 1 : 0;
+        }
+
+        const hiddenCount = countHiddenNodes(result.cstNode);
+        // Should have whitespace nodes between tokens: 'model' ' ' 'MyModel' ' ' '{' ' ' '}'
+        expect(hiddenCount).toBeGreaterThan(0);
+    });
+
+    test('CST grammarSource is set on leaf nodes', () => {
+        const model = { $type: 'Model', name: 'MyModel', items: [] };
+
+        const result = serializer.serializeWithCst(model as AstNode);
+
+        // Find non-hidden leaf nodes and check grammarSource
+        function findLeafNodes(node: CstNode): CstNode[] {
+            if ('content' in node) {
+                return (node as { content: CstNode[] }).content.flatMap(c => findLeafNodes(c));
+            }
+            return [node];
+        }
+
+        const leafNodes = findLeafNodes(result.cstNode).filter(n => !n.hidden);
+        // At least some leaf nodes should have grammarSource set
+        const nodesWithGrammarSource = leafNodes.filter(n => n.grammarSource !== undefined);
+        expect(nodesWithGrammarSource.length).toBeGreaterThan(0);
+    });
+
+    test('CST positions track newlines correctly', () => {
+        const model = { $type: 'Model', name: 'MyModel', items: [] };
+
+        const result = serializer.serializeWithCst(model as AstNode, { space: '\n' });
+
+        // With newline separators, the text should span multiple lines
+        expect(result.text).toContain('\n');
+        // The CST range should reflect this
+        expect(result.cstNode.range.end.line).toBeGreaterThan(0);
+    });
+
+    test('Nested AST nodes have correct CST structure', () => {
+        const item = { $type: 'Item', name: 'test', value: 123 };
+        const model = { $type: 'Model', name: 'MyModel', items: [item] };
+
+        const result = serializer.serializeWithCst(model as AstNode);
+
+        // The item's CST node should be a descendant of the model's CST node
+        const itemCstNode = (item as AstNode).$cstNode;
+        expect(itemCstNode).toBeDefined();
+        expect(itemCstNode!.root).toBe(result.cstNode);
+    });
+});
