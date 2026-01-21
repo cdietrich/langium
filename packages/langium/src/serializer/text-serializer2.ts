@@ -81,7 +81,7 @@ export class TextSerializer2 implements TextSerializer {
     /**
      * Create the backtrack handler for serialization.
      */
-    protected createBacktrackHandler(obj: SerializableObject): BacktrackHandler<SemState, TraceItem> {
+    protected createBacktrackHandler(_obj: SerializableObject): BacktrackHandler<SemState, TraceItem> {
         // Track visited (state, nextIndex) pairs to detect cycles within the same consumption context.
         // The key insight: we only need to detect cycles between consumptions, not globally.
         // After consuming a value, we've made progress and previous cycle detection state is irrelevant.
@@ -187,7 +187,7 @@ export class TextSerializer2 implements TextSerializer {
             const state = item.state;
 
             // START, STOP, EPSILON, ACTION states don't emit tokens
-            if (state.type === 'START' || state.type === 'STOP' || 
+            if (state.type === 'START' || state.type === 'STOP' ||
                 state.type === 'EPSILON' || state.type === 'ACTION') {
                 continue;
             }
