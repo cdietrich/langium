@@ -208,12 +208,12 @@ export class TextSerializer2 implements TextSerializer {
                     tokens.push(token);
                 }
             } else if (state.type === 'RULE_CALL') {
-                const token = this.emitRuleCall(state, item, featureNames, options);
+                const token = this.emitRuleCall(state, item, options);
                 if (token) {
                     tokens.push(token);
                 }
             } else if (state.type === 'CROSS_REFERENCE') {
-                const token = this.emitCrossReference(state, item, featureNames, options);
+                const token = this.emitCrossReference(state, item, options);
                 if (token) {
                     tokens.push(token);
                 }
@@ -306,7 +306,6 @@ export class TextSerializer2 implements TextSerializer {
     protected emitRuleCall(
         state: SemState,
         item: TraceItem,
-        _featureNames: Map<number, string>,
         options: ResolvedTextSerializeOptions
     ): string | undefined {
         const grammarElement = state.grammarElement;
@@ -429,7 +428,6 @@ export class TextSerializer2 implements TextSerializer {
     protected emitCrossReference(
         state: SemState,
         item: TraceItem,
-        _featureNames: Map<number, string>,
         options: ResolvedTextSerializeOptions
     ): string | undefined {
         if (!isCrossReference(state.grammarElement)) return undefined;
@@ -471,13 +469,6 @@ export class TextSerializer2 implements TextSerializer {
     }
 
     /**
-     * Check if a value is an AST node (has $type property).
-     */
-    protected isAstNode(value: unknown): value is AstNode {
-        return typeof value === 'object' && value !== null && '$type' in value;
-    }
-
-    /**
      * Format a primitive value for output.
      */
     protected formatValue(
@@ -488,7 +479,7 @@ export class TextSerializer2 implements TextSerializer {
         options: ResolvedTextSerializeOptions
     ): string {
         // Child AST nodes are recursively serialized
-        if (this.isAstNode(value)) {
+        if (isAstNode(value)) {
             return this.serialize(value, options);
         }
 

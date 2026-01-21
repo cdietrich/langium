@@ -386,10 +386,7 @@ export class NfaBuilder {
 
         // For unordered groups, we need all permutations of the elements
         // This ensures any order of assignments can be serialized
-        // Limit to small groups to avoid combinatorial explosion
-        if (elements.length > 4) {
-            console.warn(`Unordered group with ${elements.length} elements may cause performance issues`);
-        }
+        // Note: n! permutations are generated, so large groups (>4 elements) may cause performance issues
 
         const entries: SemState[] = [];
         const permutations = this.generatePermutations(elements.length);
