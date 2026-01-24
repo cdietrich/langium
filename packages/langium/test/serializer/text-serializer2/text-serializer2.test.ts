@@ -547,6 +547,200 @@ describe('TextSerializer2 Union/Alias Rules', async () => {
  * Tests for serializeValue hook - custom serialization of terminal/datatype rule values.
  * Demonstrates escaping keywords with backticks using a custom ValueConverter and serializeValue hook.
  */
+/**
+ * Tests for edge cases and additional grammar patterns.
+ */
+/**
+ * Tests for deeply nested optional groups (3+ levels).
+ */
+describe('TextSerializer2 Deeply Nested Optional Groups', async () => {
+
+    const grammar = expandToStringLF`
+        grammar DeeplyNestedTest
+
+        entry DeeplyNested:
+            'deep'
+            ('level1' l1=ID
+                ('level2' l2=ID
+                    ('level3' l3=ID
+                        ('level4' l4=ID)?
+                    )?
+                )?
+            )?
+            'end';
+
+        hidden terminal WS: /\\s+/;
+        terminal ID: /[_a-zA-Z][\\w]*/;
+    `;
+
+    const services = await createServicesForGrammar({ grammar });
+    const serializer = new TextSerializer2(services);
+    const parse = parseHelper<AstNode>(services);
+
+    beforeEach(() => {
+        clearDocuments(services);
+    });
+
+    test('Serialize deeply nested optional groups - all present', () => {
+        const deep = {
+            $type: 'DeeplyNested',
+            l1: 'a',
+            l2: 'b',
+            l3: 'c',
+            l4: 'd'
+        };
+        const text = serializer.serialize(deep as AstNode);
+        expect(text).toBe('deep level1 a level2 b level3 c level4 d end');
+    });
+
+    test('Serialize deeply nested optional groups - level 3 only', () => {
+        const deep = {
+            $type: 'DeeplyNested',
+            l1: 'a',
+            l2: 'b',
+            l3: 'c'
+        };
+        const text = serializer.serialize(deep as AstNode);
+        expect(text).toBe('deep level1 a level2 b level3 c end');
+    });
+
+    test('Serialize deeply nested optional groups - level 2 only', () => {
+        const deep = {
+            $type: 'DeeplyNested',
+            l1: 'a',
+            l2: 'b'
+        };
+        const text = serializer.serialize(deep as AstNode);
+        expect(text).toBe('deep level1 a level2 b end');
+    });
+
+    test('Serialize deeply nested optional groups - level 1 only', () => {
+        const deep = {
+            $type: 'DeeplyNested',
+            l1: 'a'
+        };
+        const text = serializer.serialize(deep as AstNode);
+        expect(text).toBe('deep level1 a end');
+    });
+
+    test('Serialize deeply nested optional groups - none', () => {
+        const deep = { $type: 'DeeplyNested' };
+        const text = serializer.serialize(deep as AstNode);
+        expect(text).toBe('deep end');
+    });
+
+    test('Roundtrip: Deeply nested all levels', async () => {
+        const input = 'deep level1 a level2 b level3 c level4 d end';
+        const doc = await parse(input);
+        expect(doc.parseResult.parserErrors).toHaveLength(0);
+
+        const serialized = serializer.serialize(doc.parseResult.value);
+        expect(serialized).toBe(input);
+    });
+
+    test('Roundtrip: Deeply nested partial levels', async () => {
+        const input = 'deep level1 x level2 y end';
+        const doc = await parse(input);
+        expect(doc.parseResult.parserErrors).toHaveLength(0);
+
+        const serialized = serializer.serialize(doc.parseResult.value);
+        expect(serialized).toBe(input);
+    });
+});
+
+/**
+ * Tests for required list with separator pattern.
+ */
+describe('TextSerializer2 Required List Pattern', async () => {
+
+    const grammar = expandToStringLF`
+        grammar RequiredListTest
+
+        entry RequiredList: 'required' values+=ID (',' values+=ID)*;
+
+        hidden terminal WS: /\\s+/;
+        terminal ID: /[_a-zA-Z][\\w]*/;
+    `;
+
+    const services = await createServicesForGrammar({ grammar });
+    const serializer = new TextSerializer2(services);
+    const parse = parseHelper<AstNode>(services);
+
+    beforeEach(() => {
+        clearDocuments(services);
+    });
+
+    test('Serialize required list with single value', () => {
+        const list = { $type: 'RequiredList', values: ['only'] };
+        const text = serializer.serialize(list as AstNode);
+        expect(text).toBe('required only');
+    });
+
+    test('Serialize required list with multiple values', () => {
+        const list = { $type: 'RequiredList', values: ['a', 'b', 'c'] };
+        const text = serializer.serialize(list as AstNode);
+        expect(text).toBe('required a , b , c');
+    });
+
+    test('Roundtrip: Required list', async () => {
+        const input = 'required x , y , z';
+        const doc = await parse(input);
+        expect(doc.parseResult.parserErrors).toHaveLength(0);
+
+        const serialized = serializer.serialize(doc.parseResult.value);
+        expect(serialized).toBe(input);
+    });
+});
+
+/**
+ * Tests for empty cross-reference array handling.
+ */
+describe('TextSerializer2 Empty CrossRef Array', async () => {
+
+    const grammar = expandToStringLF`
+        grammar EmptyCrossRefTest
+
+        entry Model: items+=Item*;
+
+        Item: 'item' name=ID | EmptyArrayHolder;
+
+        EmptyArrayHolder: 'holder' name=ID ('refs' refs+=[Item])*;
+
+        hidden terminal WS: /\\s+/;
+        terminal ID: /[_a-zA-Z][\\w]*/;
+    `;
+
+    const services = await createServicesForGrammar({ grammar });
+    const serializer = new TextSerializer2(services);
+
+    beforeEach(() => {
+        clearDocuments(services);
+    });
+
+    test('Serialize empty cross-reference array', () => {
+        const holder = { $type: 'EmptyArrayHolder', name: 'empty', refs: [] };
+        const model = { $type: 'Model', items: [holder] };
+        const text = serializer.serialize(model as AstNode);
+        expect(text).toBe('holder empty');
+    });
+
+    test('Serialize with single cross-reference', () => {
+        const item = { $type: 'Item', name: 'target' };
+        const holder = {
+            $type: 'EmptyArrayHolder',
+            name: 'single',
+            refs: [{ $refText: 'target', ref: item }]
+        };
+        const model = { $type: 'Model', items: [holder] };
+        const text = serializer.serialize(model as AstNode);
+        expect(text).toBe('holder single refs target');
+    });
+});
+
+/**
+ * Tests for serializeValue hook - custom serialization of terminal/datatype rule values.
+ * Demonstrates escaping keywords with backticks using a custom ValueConverter and serializeValue hook.
+ */
 describe('TextSerializer2 serializeValue Hook', () => {
 
     const grammar = expandToStringLF`
