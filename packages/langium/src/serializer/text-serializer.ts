@@ -377,12 +377,12 @@ export class DefaultTextSerializer implements TextSerializer {
                 return this.emitNode(value, context, options, rule);
             }
             if (isDataTypeRule(rule)) {
-                return [this.formatPrimitive(value, rule, context.node, property, options)];
+                return [this.serializeValue(value, rule, context.node, property, options)];
             }
             return undefined;
         }
         if (isTerminalRule(rule)) {
-            return [this.formatPrimitive(value, rule, context.node, property, options)];
+            return [this.serializeValue(value, rule, context.node, property, options)];
         }
         return undefined;
     }
@@ -445,7 +445,7 @@ export class DefaultTextSerializer implements TextSerializer {
             if (index !== undefined) {
                 this.updateUsage(context, context.node, feature, index + 1);
             }
-            return [this.formatPrimitive(value, rule, context.node, feature, options)];
+            return [this.serializeValue(value, rule, context.node, feature, options)];
         }
         return undefined;
     }
@@ -494,7 +494,7 @@ export class DefaultTextSerializer implements TextSerializer {
         return reference.$refText;
     }
 
-    protected formatPrimitive(value: unknown, rule: { name: string }, node: AstNode, property: string, options: ResolvedTextSerializeOptions): string {
+    protected serializeValue(value: unknown, rule: { name: string }, node: AstNode, property: string, options: ResolvedTextSerializeOptions): string {
         // If a custom serializeValue hook is provided, use it
         if (options.serializeValue) {
             return options.serializeValue({

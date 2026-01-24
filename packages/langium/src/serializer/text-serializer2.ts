@@ -279,7 +279,7 @@ export class TextSerializer2 implements TextSerializer {
         if (isRuleCall(terminal) || isTerminalRuleCall(terminal)) {
             const rule = terminal.rule.ref;
             if (rule) {
-                return this.formatValue(value, rule.name, item.obj.node, feature, options);
+                return this.serializeValue(value, rule.name, item.obj.node, feature, options);
             }
         }
 
@@ -289,7 +289,7 @@ export class TextSerializer2 implements TextSerializer {
         }
 
         // Fallback
-        return this.formatValue(value, 'unknown', item.obj.node, feature, options);
+        return this.serializeValue(value, 'unknown', item.obj.node, feature, options);
     }
 
     /**
@@ -339,7 +339,7 @@ export class TextSerializer2 implements TextSerializer {
             if (isTerminalRule(rule)) {
                 const candidate = this.findPrimitiveProperty(node);
                 if (candidate) {
-                    return this.formatValue(candidate.value, rule.name, node, candidate.feature, options);
+                    return this.serializeValue(candidate.value, rule.name, node, candidate.feature, options);
                 }
             }
         }
@@ -471,7 +471,7 @@ export class TextSerializer2 implements TextSerializer {
     /**
      * Format a primitive value for output.
      */
-    protected formatValue(
+    protected serializeValue(
         value: unknown,
         ruleName: string,
         node: AstNode,
