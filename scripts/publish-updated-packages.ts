@@ -40,10 +40,6 @@ async function updateAndPublish() {
     const ext = await tryPublishExtension();
     if (!ext && packagesToPublish.length === 0) {
         console.log('All packages are up to date. Nothing to publish.');
-        if (process.env.RUN_ID) {
-            console.log(`Marking GitHub Action run ${process.env.RUN_ID} as cancelled.`);
-            execSync(`gh run cancel ${process.env.RUN_ID}`);
-        }
     }
 }
 
@@ -55,8 +51,8 @@ async function publishPackage(packagePath: string) {
             return;
         }
         exec('npm publish --provenance --access public', { cwd: packagePath }, (error, stdout, stderr) => {
-            if (error || stderr) {
-                reject(error || new Error(stderr));
+            if (error) {
+                reject(error);
                 return;
             }
             console.log(`Successfully published package at ${packagePath}:`, stdout);
@@ -123,9 +119,9 @@ async function tryPublishExtension(): Promise<boolean> {
 
 async function getVsceVersion(id: string): Promise<string> {
     return new Promise((resolve, reject) => {
-        exec(`npx vsce show ${id} --json`, (error, stdout, stderr) => {
-            if (error || stderr) {
-                reject(error || new Error(stderr));
+        exec(`npx vsce show ${id} --json`, (error, stdout) => {
+            if (error) {
+                reject(error);
                 return;
             }
             const info = JSON.parse(stdout);
@@ -142,8 +138,8 @@ async function publishVsce(packagePath: string, fileName: string): Promise<void>
             return;
         }
         exec(`npx vsce publish ${fileName} -p ${process.env.VSCE_TOKEN}`, { cwd: packagePath }, (error, stdout, stderr) => {
-            if (error || stderr) {
-                reject(error || new Error(stderr));
+            if (error) {
+                reject(error);
                 return;
             }
             console.log(`Successfully published VSCE extension at ${packagePath}:`, stdout);
@@ -155,8 +151,8 @@ async function publishVsce(packagePath: string, fileName: string): Promise<void>
 async function getOvsxVersion(id: string): Promise<string> {
     return new Promise((resolve, reject) => {
         exec(`npx ovsx get ${id} --metadata`, (error, stdout, stderr) => {
-            if (error || stderr) {
-                reject(error || new Error(stderr));
+            if (error) {
+                reject(error);
                 return;
             }
             const info = JSON.parse(stdout);
@@ -173,8 +169,8 @@ async function publishOvsx(packagePath: string, fileName: string): Promise<void>
             return;
         }
         exec(`npx ovsx publish ${fileName} -p ${process.env.OVSX_TOKEN}`, { cwd: packagePath }, (error, stdout, stderr) => {
-            if (error || stderr) {
-                reject(error || new Error(stderr));
+            if (error) {
+                reject(error);
                 return;
             }
             console.log(`Successfully published OVSX extension at ${packagePath}:`, stdout);

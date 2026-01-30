@@ -1,7 +1,7 @@
 {
   "name": "langium-domainmodel-dsl",
   "displayName": "Domain Model DSL",
-  "version": "4.1.0",
+  "version": "4.2.0",
   "description": "Example language built with Langium",
   "homepage": "https://langium.org",
   "engines": {
@@ -57,19 +57,15 @@
     "publish:latest": "npm publish --tag latest --access public"
   },
   "dependencies": {
-    "chalk": "~5.4.1",
+    "chalk": "~5.6.0",
     "commander": "~14.0.0",
-    "langium": "~4.1.0",
+    "langium": "~4.2.0",
     "lodash": "~4.17.21",
     "vscode-languageclient": "~9.0.1",
     "vscode-languageserver": "~9.0.1"
   },
   "devDependencies": {
-    "langium-cli": "~4.1.0"
-  },
-  "volta": {
-    "node": "20.19.2",
-    "npm": "10.8.2"
+    "langium-cli": "~4.2.0"
   },
   "repository": {
     "type": "git",

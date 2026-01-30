@@ -237,10 +237,6 @@ const PACKAGE_JSON_EXPECTATION: Record<string, any> = {
         'shx':  '~0.4.0',
         'typescript': '~5.8.3'
     },
-    volta: {
-        'node': '20.19.2',
-        'npm': '10.8.2'
-    },
     workspaces: [
         'packages/language'
     ]
@@ -269,10 +265,6 @@ const PACKAGE_JSON_EXPECTATION_CLI: Record<string, any> = {
         'hello-world-language': '0.0.1',
         'chalk': '~5.3.0',
         'commander': '~11.1.0'
-    },
-    volta: {
-        'node': '20.19.2',
-        'npm': '10.8.2'
     }
 };
 
@@ -326,7 +318,7 @@ const PACKAGE_JSON_EXPECTATION_EXTENSION: Record<string, any> = {
 };
 
 const TASKS_JSON_EXPECTATION =
-normalizeEOL(`{
+    normalizeEOL(`{
     // See https://go.microsoft.com/fwlink/?LinkId=733558
     // for the documentation about the tasks.json format
     "version": "2.0.0",
