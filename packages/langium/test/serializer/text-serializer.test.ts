@@ -200,6 +200,18 @@ describe('TextSerializer', async () => {
         expect(serializer.serialize(unflagged as AstNode)).toBe('unorderedOpt n');
     });
 
+    test('Serialize ?= operator with false value in group', () => {
+        // When flag is explicitly false, it should behave like undefined
+        // and not emit the keyword, allowing the group to continue
+        const falseFlag = { $type: 'UnorderedOptional', name: 'n', flag: false };
+        const trueFlag = { $type: 'UnorderedOptional', name: 'n', flag: true };
+        const undefinedFlag = { $type: 'UnorderedOptional', name: 'n' };
+
+        expect(serializer.serialize(falseFlag as AstNode)).toBe('unorderedOpt n');
+        expect(serializer.serialize(trueFlag as AstNode)).toBe('unorderedOpt n flag');
+        expect(serializer.serialize(undefinedFlag as AstNode)).toBe('unorderedOpt n');
+    });
+
     test('Serialize repeated group assignments', () => {
         const repeated = { $type: 'Repeated', values: ['a', 'b'] };
         const empty = { $type: 'Repeated', values: [] };
