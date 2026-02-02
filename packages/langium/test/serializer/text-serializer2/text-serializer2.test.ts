@@ -454,6 +454,78 @@ describe('TextSerializer2 BooleanLiteral Pattern Issue', async () => {
     });
 });
 
+describe('TextSerializer2 BooleanLiteral Pattern 2 Issue', async () => {
+
+    const grammar = expandToStringLF`
+        grammar BooleanLiteralTest
+
+        entry Model: 'model' items+=LiteralWrapper*;
+
+        LiteralWrapper: 'lit' value=BooleanLiteral?;
+
+        // This is the problematic pattern from lotse-terminals.langium
+        BooleanLiteral: value ?= 'true'?;
+
+        hidden terminal WS: /\\s+/;
+    `;
+
+    const services = await createServicesForGrammar({ grammar });
+    const serializer = new TextSerializer2(services);
+    const jsonSerializer = services.serializer.JsonSerializer;
+    const parse = parseHelper<AstNode>(services);
+
+    beforeEach(() => {
+        clearDocuments(services);
+    });
+
+    test('Serialize BooleanLiteral with true - WORKS', () => {
+        const boolTrue = { $type: 'BooleanLiteral', value: true };
+        const wrapper = { $type: 'LiteralWrapper', value: boolTrue };
+        const model = { $type: 'Model', items: [wrapper] };
+
+        const text = serializer.serialize(model as AstNode);
+        expect(text).toBe('model lit true');
+    });
+
+    test('Debug grammar structure', () => {
+        // Check what the grammar structure looks like for BooleanLiteral
+        const grammar = services.Grammar;
+        const boolRule = grammar.rules.find(r => r.name === 'BooleanLiteral') as { definition?: unknown };
+        console.log('BooleanLiteral rule definition:', JSON.stringify(boolRule?.definition, (k, v) => {
+            if (k === '$container' || k === '$cstNode' || k === '$document') return undefined;
+            return v;
+        }, 2));
+    });
+
+    test('Serialize BooleanLiteral with false - WORKS', () => {
+        const boolFalse = { $type: 'BooleanLiteral', value: false };
+        const wrapper = { $type: 'LiteralWrapper', value: boolFalse };
+        const model = { $type: 'Model', items: [wrapper] };
+
+        console.log('Serializing model:', JSON.stringify(model, null, 2));
+        const text = serializer.serialize(model as AstNode);
+        console.log('Serialized text:', text);
+        expect(text).toBe('model lit');
+    });
+
+    test('Roundtrip BooleanLiteral false - WORKS', async () => {
+        const input = 'model lit';
+        const doc1 = await parse(input);
+        await services.shared.workspace.DocumentBuilder.build([doc1]);
+        expect(doc1.parseResult.parserErrors).toHaveLength(0);
+
+        const serialized = serializer.serialize(doc1.parseResult.value);
+
+        const doc2 = await parse(serialized);
+        await services.shared.workspace.DocumentBuilder.build([doc2]);
+        expect(doc2.parseResult.parserErrors).toHaveLength(0);
+
+        const json1 = jsonSerializer.serialize(doc1.parseResult.value);
+        const json2 = jsonSerializer.serialize(doc2.parseResult.value);
+        expect(json1).toBe(json2);
+    });
+});
+
 /**
  * Issue 2: Parser rule with `infers` that shares AST type with another rule
  *
