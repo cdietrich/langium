@@ -33,6 +33,7 @@ export class NfaBuilder {
     private readonly ruleTargets = new Map<string, ParserRule>();
     private readonly nfaCache = new Map<string, SemNfa>();
     private readonly featureMapCache = new Map<string, FeatureMap>();
+    private readonly booleanFeatureCache = new Map<string, Set<number>>();
     private orderCounter = 0;
 
     constructor(services: LangiumCoreServices) {
@@ -62,6 +63,19 @@ export class NfaBuilder {
             this.featureMapCache.set(type, map);
         }
         return map;
+    }
+
+    /**
+     * Get or build the set of feature indices that are only used by boolean assignments (?=).
+     * These features treat `false` as "no value to emit".
+     */
+    getBooleanAssignmentFeatures(type: string): Set<number> {
+        let set = this.booleanFeatureCache.get(type);
+        if (!set) {
+            set = this.buildBooleanAssignmentFeatures(type);
+            this.booleanFeatureCache.set(type, set);
+        }
+        return set;
     }
 
     /**
@@ -113,6 +127,29 @@ export class NfaBuilder {
     }
 
     /**
+     * Build a set of feature indices that are exclusively used by boolean assignments (?=).
+     */
+    private buildBooleanAssignmentFeatures(type: string): Set<number> {
+        const featureInfo = new Map<string, { hasBoolean: boolean; hasNonBoolean: boolean }>();
+        const rule = this.ruleTargets.get(type);
+        if (rule) {
+            this.collectAssignmentKinds(rule.definition, featureInfo);
+        }
+
+        const featureMap = this.getFeatureMap(type);
+        const booleanOnly = new Set<number>();
+        for (const [feature, info] of featureInfo) {
+            if (info.hasBoolean && !info.hasNonBoolean) {
+                const index = featureMap.get(feature);
+                if (index !== undefined) {
+                    booleanOnly.add(index);
+                }
+            }
+        }
+        return booleanOnly;
+    }
+
+    /**
      * Recursively collect all feature names from assignments.
      */
     private collectFeatures(element: AbstractElement, map: Map<string, number>, insideAssignment = false): void {
@@ -139,6 +176,46 @@ export class NfaBuilder {
                 // Unassigned parser rule calls: inline features from called rule
                 else if (!insideAssignment && !isDataTypeRule(rule)) {
                     this.collectFeatures(rule.definition, map, false);
+                }
+            }
+        }
+    }
+
+    /**
+     * Recursively collect whether features are assigned via ?= or regular operators.
+     * Used to determine which features should treat `false` as "no value".
+     */
+    private collectAssignmentKinds(
+        element: AbstractElement,
+        map: Map<string, { hasBoolean: boolean; hasNonBoolean: boolean }>,
+        insideAssignment = false
+    ): void {
+        if (isAssignment(element)) {
+            const entry = map.get(element.feature) ?? { hasBoolean: false, hasNonBoolean: false };
+            if (element.operator === '?=') {
+                entry.hasBoolean = true;
+            } else {
+                entry.hasNonBoolean = true;
+            }
+            map.set(element.feature, entry);
+            this.collectAssignmentKinds(element.terminal, map, true);
+            return;
+        }
+
+        if (isAlternatives(element) || isGroup(element) || isUnorderedGroup(element)) {
+            for (const child of element.elements) {
+                this.collectAssignmentKinds(child, map, insideAssignment);
+            }
+            return;
+        }
+
+        if (isRuleCall(element)) {
+            const rule = element.rule?.ref;
+            if (rule && isParserRule(rule) && rule.definition) {
+                if (rule.fragment) {
+                    this.collectAssignmentKinds(rule.definition, map, insideAssignment);
+                } else if (!insideAssignment && !isDataTypeRule(rule)) {
+                    this.collectAssignmentKinds(rule.definition, map, false);
                 }
             }
         }

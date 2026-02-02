@@ -4,15 +4,18 @@
  * terms of the MIT License, which is available in the project root.
  ******************************************************************************/
 
-import type { AstNode, CstNode, Grammar, LangiumCoreServices } from 'langium';
-import type { AbstractRule } from '../../../src/languages/generated/ast.js';
+import type { AstNode, CstNode } from '../../../src/syntax-tree.js';
+import type { Grammar, AbstractRule } from '../../../src/languages/generated/ast.js';
 import type { SerializeValueContext } from '../../../src/serializer/text-serializer.js';
 import type { ValueType } from '../../../src/parser/value-converter.js';
-import { AstUtils, DefaultValueConverter, GrammarAST } from 'langium';
-import { createServicesForGrammar } from 'langium/grammar';
-import { expandToStringLF } from 'langium/generate';
+import type { LangiumCoreServices } from '../../../src/services.js';
+import { AstUtils } from '../../../src/utils/index.js';
+import { DefaultValueConverter } from '../../../src/parser/value-converter.js';
+import * as GrammarAST from '../../../src/languages/generated/ast.js';
+import { createServicesForGrammar } from '../../../src/grammar/internal-grammar-util.js';
+import { expandToStringLF } from '../../../src/generate/template-string.js';
 import { beforeAll, beforeEach, describe, expect, test } from 'vitest';
-import { clearDocuments, parseHelper } from 'langium/test';
+import { clearDocuments, parseHelper } from '../../../src/test/langium-test.js';
 import { TextSerializer2 } from '../../../src/serializer/text-serializer2.js';
 
 describe('TextSerializer2', async () => {
@@ -701,6 +704,36 @@ describe('TextSerializer2 Required List Pattern', async () => {
 
         const serialized = serializer.serialize(doc.parseResult.value);
         expect(serialized).toBe(input);
+    });
+});
+
+/**
+ * Tests for boolean assignments that explicitly allow false values.
+ */
+describe('TextSerializer2 Boolean Assignments with false', async () => {
+
+    const grammar = expandToStringLF`
+        grammar BooleanValueTest
+
+        entry Model: 'model' flag=BOOLEAN;
+
+        terminal BOOLEAN returns boolean: /true|false/;
+        hidden terminal WS: /\\s+/;
+    `;
+
+    const services = await createServicesForGrammar({ grammar });
+    const serializer = new TextSerializer2(services);
+
+    test('Serialize boolean assignment with false value', () => {
+        const model = { $type: 'Model', flag: false };
+        const text = serializer.serialize(model as AstNode);
+        expect(text).toBe('model false');
+    });
+
+    test('Serialize boolean assignment with true value', () => {
+        const model = { $type: 'Model', flag: true };
+        const text = serializer.serialize(model as AstNode);
+        expect(text).toBe('model true');
     });
 });
 

@@ -4,11 +4,11 @@
  * terms of the MIT License, which is available in the project root.
  ******************************************************************************/
 
-import type { AstNode } from 'langium';
-import { createServicesForGrammar } from 'langium/grammar';
-import { expandToStringLF } from 'langium/generate';
+import type { AstNode } from '../../../src/syntax-tree.js';
+import { createServicesForGrammar } from '../../../src/grammar/internal-grammar-util.js';
+import { expandToStringLF } from '../../../src/generate/template-string.js';
 import { beforeEach, describe, expect, test } from 'vitest';
-import { clearDocuments, parseHelper } from 'langium/test';
+import { clearDocuments, parseHelper } from '../../../src/test/langium-test.js';
 import { TextSerializer2 } from '../../../src/serializer/text-serializer2.js';
 
 /**

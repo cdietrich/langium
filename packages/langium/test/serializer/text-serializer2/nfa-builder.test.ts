@@ -5,8 +5,8 @@
  ******************************************************************************/
 
 import { describe, expect, test } from 'vitest';
-import { createServicesForGrammar } from 'langium/grammar';
-import { expandToStringLF } from 'langium/generate';
+import { createServicesForGrammar } from '../../../src/grammar/internal-grammar-util.js';
+import { expandToStringLF } from '../../../src/generate/template-string.js';
 import { NfaBuilder } from '../../../src/serializer/nfa-builder.js';
 import type { SemState } from '../../../src/serializer/nfa-types.js';
 

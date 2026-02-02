@@ -36,7 +36,7 @@ export class SerializableObject {
     /** Feature count per index (1 for single, length for array, 0 for missing) */
     private readonly valueCounts: number[];
 
-    constructor(node: AstNode, featureMap: FeatureMap) {
+    constructor(node: AstNode, featureMap: FeatureMap, booleanAssignmentOnly: Set<number>) {
         this.node = node;
         this.type = node.$type;
         this.featureCount = featureMap.size;
@@ -46,7 +46,7 @@ export class SerializableObject {
         for (const [feature, index] of featureMap) {
             const value = (node as GenericAstNode)[feature];
             this.values[index] = value;
-            this.valueCounts[index] = this.computeValueCount(value);
+            this.valueCounts[index] = this.computeValueCount(value, index, booleanAssignmentOnly);
         }
     }
 
@@ -104,8 +104,11 @@ export class SerializableObject {
      * This is because boolean assignments (`?=`) use `true` to mean "emit this"
      * and `false`/`undefined` to mean "skip this".
      */
-    private computeValueCount(value: unknown): number {
-        if (value === undefined || value === false) {
+    private computeValueCount(value: unknown, featureIndex: number, booleanAssignmentOnly: Set<number>): number {
+        if (value === undefined) {
+            return 0;
+        }
+        if (value === false && booleanAssignmentOnly.has(featureIndex)) {
             return 0;
         }
         if (Array.isArray(value)) {

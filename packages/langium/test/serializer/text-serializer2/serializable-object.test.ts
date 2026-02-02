@@ -31,7 +31,7 @@ describe('SerializableObject', () => {
                 value: 42
             });
             const featureMap = createFeatureMap(['name', 'value']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             expect(obj.type).toBe('TestNode');
             expect(obj.featureCount).toBe(2);
@@ -44,7 +44,7 @@ describe('SerializableObject', () => {
                 items: ['a', 'b', 'c']
             });
             const featureMap = createFeatureMap(['items']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             expect(obj.getValue(0, 0)).toBe('a');
             expect(obj.getValue(0, 1)).toBe('b');
@@ -57,7 +57,7 @@ describe('SerializableObject', () => {
                 // value is missing
             });
             const featureMap = createFeatureMap(['name', 'value']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             expect(obj.getValue(0, 0)).toBe('test');
             expect(obj.getValue(1, 0)).toBe(undefined);
@@ -72,7 +72,7 @@ describe('SerializableObject', () => {
                 flag: true
             });
             const featureMap = createFeatureMap(['name', 'count', 'flag']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             expect(obj.getValueCount(0)).toBe(1);
             expect(obj.getValueCount(1)).toBe(1);
@@ -85,7 +85,7 @@ describe('SerializableObject', () => {
                 empty: []
             });
             const featureMap = createFeatureMap(['items', 'empty']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             expect(obj.getValueCount(0)).toBe(3);
             expect(obj.getValueCount(1)).toBe(0); // empty array
@@ -96,7 +96,7 @@ describe('SerializableObject', () => {
                 name: 'test'
             });
             const featureMap = createFeatureMap(['name', 'missing']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             expect(obj.getValueCount(0)).toBe(1);
             expect(obj.getValueCount(1)).toBe(0);
@@ -105,7 +105,7 @@ describe('SerializableObject', () => {
         test('should return 0 for out-of-bounds featureIndex', () => {
             const node = createMockNode({ name: 'test' });
             const featureMap = createFeatureMap(['name']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             expect(obj.getValueCount(100)).toBe(0);
         });
@@ -117,7 +117,7 @@ describe('SerializableObject', () => {
                 enabled: false
             });
             const featureMap = createFeatureMap(['enabled']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set([0])); // Mark index 0 as boolean assignment
 
             expect(obj.getValueCount(0)).toBe(0);
             expect(obj.getValue(0, 0)).toBe(false); // raw value is still accessible
@@ -128,7 +128,7 @@ describe('SerializableObject', () => {
                 value: null
             });
             const featureMap = createFeatureMap(['value']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             expect(obj.getValueCount(0)).toBe(1);
             expect(obj.getValue(0, 0)).toBe(null);
@@ -139,7 +139,7 @@ describe('SerializableObject', () => {
                 name: ''
             });
             const featureMap = createFeatureMap(['name']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             expect(obj.getValueCount(0)).toBe(1);
             expect(obj.getValue(0, 0)).toBe('');
@@ -150,7 +150,7 @@ describe('SerializableObject', () => {
                 count: 0
             });
             const featureMap = createFeatureMap(['count']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             expect(obj.getValueCount(0)).toBe(1);
             expect(obj.getValue(0, 0)).toBe(0);
@@ -161,7 +161,7 @@ describe('SerializableObject', () => {
         test('should return correct value for single at index 0', () => {
             const node = createMockNode({ name: 'test' });
             const featureMap = createFeatureMap(['name']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             expect(obj.getValue(0, 0)).toBe('test');
         });
@@ -169,7 +169,7 @@ describe('SerializableObject', () => {
         test('should return undefined for single at index > 0', () => {
             const node = createMockNode({ name: 'test' });
             const featureMap = createFeatureMap(['name']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             expect(obj.getValue(0, 1)).toBe(undefined);
             expect(obj.getValue(0, 10)).toBe(undefined);
@@ -178,7 +178,7 @@ describe('SerializableObject', () => {
         test('should return correct array element at index', () => {
             const node = createMockNode({ items: ['a', 'b', 'c'] });
             const featureMap = createFeatureMap(['items']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             expect(obj.getValue(0, 0)).toBe('a');
             expect(obj.getValue(0, 1)).toBe('b');
@@ -193,7 +193,7 @@ describe('SerializableObject', () => {
                 flag: true
             });
             const featureMap = createFeatureMap(['name', 'items', 'flag']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             expect(obj.getValue(0, 0)).toBe('test');
             expect(obj.getValue(1, 0)).toBe(1);
@@ -207,7 +207,7 @@ describe('SerializableObject', () => {
         test('should return raw single value', () => {
             const node = createMockNode({ name: 'test' });
             const featureMap = createFeatureMap(['name']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             expect(obj.getRawValue(0)).toBe('test');
         });
@@ -216,7 +216,7 @@ describe('SerializableObject', () => {
             const items = ['a', 'b', 'c'];
             const node = createMockNode({ items });
             const featureMap = createFeatureMap(['items']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             expect(obj.getRawValue(0)).toEqual(['a', 'b', 'c']);
         });
@@ -224,7 +224,7 @@ describe('SerializableObject', () => {
         test('should return undefined for missing property', () => {
             const node = createMockNode({});
             const featureMap = createFeatureMap(['missing']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             expect(obj.getRawValue(0)).toBe(undefined);
         });
@@ -237,7 +237,7 @@ describe('SerializableObject', () => {
                 items: ['a', 'b']
             });
             const featureMap = createFeatureMap(['name', 'items']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             // name: 1 value, items: 2 values
             // nextIndices [1, 2] means all consumed
@@ -250,7 +250,7 @@ describe('SerializableObject', () => {
                 items: ['a', 'b']
             });
             const featureMap = createFeatureMap(['name', 'items']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             expect(obj.isFullyConsumed([1, 1])).toBe(false); // items has 1 remaining
             expect(obj.isFullyConsumed([0, 2])).toBe(false); // name has 1 remaining
@@ -263,7 +263,7 @@ describe('SerializableObject', () => {
                 // items is missing
             });
             const featureMap = createFeatureMap(['name', 'items']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             // items has 0 values, so [1, 0] means fully consumed
             expect(obj.isFullyConsumed([1, 0])).toBe(true);
@@ -275,7 +275,7 @@ describe('SerializableObject', () => {
                 items: []
             });
             const featureMap = createFeatureMap(['items']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             // empty array has 0 values
             expect(obj.isFullyConsumed([0])).toBe(true);
@@ -286,7 +286,7 @@ describe('SerializableObject', () => {
         test('should preserve node reference', () => {
             const node = createMockNode({ name: 'test' });
             const featureMap = createFeatureMap(['name']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             expect(obj.node).toBe(node);
         });
@@ -297,7 +297,7 @@ describe('SerializableObject', () => {
                 name: 'test'
             } as unknown as AstNode;
             const featureMap = createFeatureMap(['name']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             expect(obj.type).toBe('MyCustomType');
         });
@@ -310,7 +310,7 @@ describe('SerializableObject', () => {
                 reference: ref
             });
             const featureMap = createFeatureMap(['reference']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             expect(obj.getValueCount(0)).toBe(1);
             expect(obj.getValue(0, 0)).toBe(ref);
@@ -325,7 +325,7 @@ describe('SerializableObject', () => {
                 references: refs
             });
             const featureMap = createFeatureMap(['references']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             expect(obj.getValueCount(0)).toBe(2);
             expect(obj.getValue(0, 0)).toBe(refs[0]);

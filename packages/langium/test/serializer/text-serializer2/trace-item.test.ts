@@ -51,7 +51,7 @@ describe('TraceItem', () => {
         test('should share nextIndex array (reference equality)', () => {
             const node = createMockNode({ name: 'test' });
             const featureMap = createFeatureMap(['name']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
             const original = TraceItem.createInitial(obj);
 
             const state = createMockState({ feature: undefined, featureIndex: -1 });
@@ -66,7 +66,7 @@ describe('TraceItem', () => {
         test('should not copy consumed values', () => {
             const node = createMockNode({ name: 'test' });
             const featureMap = createFeatureMap(['name']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
             const original = TraceItem.createInitial(obj);
             original.value = 'some-value';
             original.index = 5;
@@ -84,7 +84,7 @@ describe('TraceItem', () => {
         test('should copy nextIndex array (different reference)', () => {
             const node = createMockNode({ name: 'test' });
             const featureMap = createFeatureMap(['name']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
             const original = TraceItem.createInitial(obj);
 
             const state = createMockState({ feature: 'name', featureIndex: 0 });
@@ -101,7 +101,7 @@ describe('TraceItem', () => {
                 value: 42
             });
             const featureMap = createFeatureMap(['name', 'value']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
             const original = TraceItem.createInitial(obj);
 
             // Consume 'value' (index 1)
@@ -116,7 +116,7 @@ describe('TraceItem', () => {
         test('should set consumed value and index', () => {
             const node = createMockNode({ name: 'test' });
             const featureMap = createFeatureMap(['name']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
             const original = TraceItem.createInitial(obj);
 
             const state = createMockState({ feature: 'name', featureIndex: 0 });
@@ -130,7 +130,7 @@ describe('TraceItem', () => {
         test('should return undefined when no value available', () => {
             const node = createMockNode({ name: 'test' });
             const featureMap = createFeatureMap(['name', 'value']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
             const original = TraceItem.createInitial(obj);
 
             // Try to consume 'value' which is undefined
@@ -143,7 +143,7 @@ describe('TraceItem', () => {
         test('should return undefined when feature already fully consumed', () => {
             const node = createMockNode({ name: 'test' });
             const featureMap = createFeatureMap(['name']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
             const original = TraceItem.createInitial(obj);
 
             const state = createMockState({ feature: 'name', featureIndex: 0 });
@@ -164,7 +164,7 @@ describe('TraceItem', () => {
         test('should handle array values correctly', () => {
             const node = createMockNode({ items: ['a', 'b', 'c'] });
             const featureMap = createFeatureMap(['items']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
             let item = TraceItem.createInitial(obj);
 
             const state = createMockState({ feature: 'items', featureIndex: 0 });
@@ -195,7 +195,7 @@ describe('TraceItem', () => {
         test('should return undefined for START/STOP states (featureIndex -1)', () => {
             const node = createMockNode({ name: 'test' });
             const featureMap = createFeatureMap(['name']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
             const original = TraceItem.createInitial(obj);
 
             const startState = createMockState({ featureIndex: -1 });
@@ -212,7 +212,7 @@ describe('TraceItem', () => {
                 items: ['a', 'b']
             });
             const featureMap = createFeatureMap(['name', 'items']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             // Manually create item with all consumed
             const item = new TraceItem(obj, [1, 2]);
@@ -225,7 +225,7 @@ describe('TraceItem', () => {
                 items: ['a', 'b']
             });
             const featureMap = createFeatureMap(['name', 'items']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             const item = TraceItem.createInitial(obj);
             expect(item.isConsumed()).toBe(false);
@@ -234,7 +234,7 @@ describe('TraceItem', () => {
         test('should return true for node with no values', () => {
             const node = createMockNode({});
             const featureMap = createFeatureMap(['name']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             const item = TraceItem.createInitial(obj);
             // No values to consume, so already "consumed"
@@ -247,7 +247,7 @@ describe('TraceItem', () => {
                 value: 42
             });
             const featureMap = createFeatureMap(['name', 'value']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             // name consumed, value not
             const item = new TraceItem(obj, [1, 0]);
@@ -263,7 +263,7 @@ describe('TraceItem', () => {
         test('should return false for boolean assignment without true value', () => {
             const node = createMockNode({ enabled: false });
             const featureMap = createFeatureMap(['enabled']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
             const item = TraceItem.createInitial(obj);
 
             const state = createMockState({
@@ -278,7 +278,7 @@ describe('TraceItem', () => {
         test('should return true for boolean assignment with true value', () => {
             const node = createMockNode({ enabled: true });
             const featureMap = createFeatureMap(['enabled']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
             const item = TraceItem.createInitial(obj);
 
             const state = createMockState({
@@ -296,7 +296,7 @@ describe('TraceItem', () => {
                 value: 42
             });
             const featureMap = createFeatureMap(['name', 'value']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
             const item = TraceItem.createInitial(obj);
 
             // Create a state where only feature 0 (name) is reachable
@@ -319,7 +319,7 @@ describe('TraceItem', () => {
                 value: 42
             });
             const featureMap = createFeatureMap(['name', 'value']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
             const item = TraceItem.createInitial(obj);
 
             // Both features are reachable
@@ -342,7 +342,7 @@ describe('TraceItem', () => {
                 value: 42
             });
             const featureMap = createFeatureMap(['name', 'value']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             // value already consumed (index 1)
             const item = new TraceItem(obj, [0, 1]);
@@ -366,7 +366,7 @@ describe('TraceItem', () => {
                 name: 'test'
             });
             const featureMap = createFeatureMap(['name']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
             const item = TraceItem.createInitial(obj);
 
             // Empty followerFeatures - nothing reachable after this state
@@ -388,7 +388,7 @@ describe('TraceItem', () => {
                 value: 42
             });
             const featureMap = createFeatureMap(['name', 'value']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
             const item = TraceItem.createInitial(obj);
 
             // followerFeatures not set - can't prune
@@ -404,7 +404,7 @@ describe('TraceItem', () => {
         test('should handle empty node correctly', () => {
             const node = createMockNode({});
             const featureMap = createFeatureMap(['name']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
             const item = TraceItem.createInitial(obj);
 
             const followerFeatures = new BitSet(32);
@@ -427,7 +427,7 @@ describe('TraceItem', () => {
                 value: 42
             });
             const featureMap = createFeatureMap(['name', 'items', 'value']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             const item = TraceItem.createInitial(obj);
 
@@ -441,7 +441,7 @@ describe('TraceItem', () => {
         test('should create item with correct feature count', () => {
             const node = createMockNode({ a: 1, b: 2, c: 3, d: 4, e: 5 });
             const featureMap = createFeatureMap(['a', 'b', 'c', 'd', 'e']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             const item = TraceItem.createInitial(obj);
 
@@ -456,7 +456,7 @@ describe('TraceItem', () => {
                 values: [1, 2]
             });
             const featureMap = createFeatureMap(['name', 'values']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             let item = TraceItem.createInitial(obj);
             expect(item.isConsumed()).toBe(false);
@@ -482,7 +482,7 @@ describe('TraceItem', () => {
         test('should allow backtracking by keeping original item unchanged', () => {
             const node = createMockNode({ choice: 'A' });
             const featureMap = createFeatureMap(['choice']);
-            const obj = new SerializableObject(node, featureMap);
+            const obj = new SerializableObject(node, featureMap, new Set());
 
             const original = TraceItem.createInitial(obj);
 

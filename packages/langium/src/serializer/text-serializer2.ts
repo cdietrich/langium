@@ -65,7 +65,8 @@ export class TextSerializer2 implements TextSerializer {
 
         const nfa = this.nfaBuilder.getNfa(node.$type);
         const featureMap = this.nfaBuilder.getFeatureMap(node.$type);
-        const obj = new SerializableObject(node, featureMap);
+        const booleanAssignmentOnly = this.nfaBuilder.getBooleanAssignmentFeatures(node.$type);
+        const obj = new SerializableObject(node, featureMap, booleanAssignmentOnly);
         const initial = TraceItem.createInitial(obj);
 
         const handler = this.createBacktrackHandler(obj);
