@@ -9,6 +9,7 @@ import { isParserRule } from '../../src/languages/generated/ast.js';
 import { DefaultConcreteSyntaxValidator } from '../../src/serializer/concrete-syntax-validator.js';
 import { DefaultContextResolver } from '../../src/serializer/context-resolver.js';
 import { GrammarAnalyzer } from '../../src/serializer/grammar-analyzer.js';
+import { DefaultToStringConverter, ToStringConverter } from '../../src/serializer/to-string-converter.js';
 import { createLangiumGrammarServices } from '../../src/grammar/langium-grammar-module.js';
 import { EmptyFileSystem } from '../../src/workspace/file-system-provider.js';
 
@@ -113,5 +114,58 @@ describe('GrammarAnalyzer', () => {
             expect(info?.typeName).toBe('ParserRule');
             expect(info?.assignments).toBeInstanceOf(Array);
         }
+    });
+});
+
+describe('DefaultToStringConverter', () => {
+    test('should convert strings by default', () => {
+        const converter = new DefaultToStringConverter(grammar);
+        expect(converter.convert('hello', 'ID')).toBe('hello');
+    });
+
+    test('should convert numbers by default', () => {
+        const converter = new DefaultToStringConverter(grammar);
+        expect(converter.convert(42, 'INT')).toBe('42');
+    });
+
+    test('should convert booleans by default', () => {
+        const converter = new DefaultToStringConverter(grammar);
+        expect(converter.convert(true, 'BOOLEAN')).toBe('true');
+        expect(converter.convert(false, 'BOOLEAN')).toBe('false');
+    });
+
+    test('should handle null and undefined', () => {
+        const converter = new DefaultToStringConverter(grammar);
+        expect(converter.convert(null as any, 'ID')).toBe('');
+        expect(converter.convert(undefined as any, 'ID')).toBe('');
+    });
+});
+
+describe('ToStringConverter namespace', () => {
+    test('escapeString should escape special characters', () => {
+        expect(ToStringConverter.escapeString('hello')).toBe('"hello"');
+        expect(ToStringConverter.escapeString('hello\nworld')).toBe('"hello\\nworld"');
+        expect(ToStringConverter.escapeString('tab\there')).toBe('"tab\\there"');
+        expect(ToStringConverter.escapeString('quote"test')).toBe('"quote\\"test"');
+        expect(ToStringConverter.escapeString('backslash\\test')).toBe('"backslash\\\\test"');
+    });
+
+    test('escapeString should use specified quote character', () => {
+        expect(ToStringConverter.escapeString('hello', "'")).toBe("'hello'");
+        expect(ToStringConverter.escapeString("it's", "'")).toBe("'it\\'s'");
+    });
+
+    test('quoteId should prefix keywords', () => {
+        const keywords = new Set(['if', 'else', 'while']);
+        expect(ToStringConverter.quoteId('if', keywords)).toBe('^if');
+        expect(ToStringConverter.quoteId('else', keywords)).toBe('^else');
+        expect(ToStringConverter.quoteId('myVar', keywords)).toBe('myVar');
+    });
+
+    test('quoteId should prefix invalid identifiers', () => {
+        const keywords = new Set<string>();
+        expect(ToStringConverter.quoteId('123abc', keywords)).toBe('^123abc');
+        expect(ToStringConverter.quoteId('my-var', keywords)).toBe('^my-var');
+        expect(ToStringConverter.quoteId('', keywords)).toBe('^');
     });
 });

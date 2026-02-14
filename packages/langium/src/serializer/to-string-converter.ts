@@ -129,14 +129,14 @@ export namespace ToStringConverter {
         let result = quote;
         for (let i = 0; i < value.length; i++) {
             const c = value.charAt(i);
-            const escaped = escapeCharacter(c);
+            const escaped = escapeCharacter(c, quote);
             result += escaped;
         }
         result += quote;
         return result;
     }
 
-    function escapeCharacter(char: string): string {
+    function escapeCharacter(char: string, quote: string): string {
         switch (char) {
             case '\b': return '\\b';
             case '\f': return '\\f';
@@ -145,9 +145,12 @@ export namespace ToStringConverter {
             case '\t': return '\\t';
             case '\v': return '\\v';
             case '\0': return '\\0';
-            case '"': return '\\"';
             case '\\': return '\\\\';
-            default: return char;
+            default:
+                if (char === quote) {
+                    return '\\' + char;
+                }
+                return char;
         }
     }
 
