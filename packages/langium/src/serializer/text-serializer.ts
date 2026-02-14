@@ -11,7 +11,20 @@ export interface TextSerializeOptions {
     format?: boolean | TextFormattingOptions;
     preserveComments?: boolean;
     ambiguityResolver?: AmbiguityResolver;
+    space?: string;
+    useRefText?: boolean;
+    serializeValue?: SerializeValueFunction;
 }
+
+export interface SerializeValueContext {
+    node: AstNode;
+    property: string;
+    value: unknown;
+    ruleName: string;
+    languageId: string;
+}
+
+export type SerializeValueFunction = (context: SerializeValueContext) => string | undefined;
 
 export interface TextFormattingOptions {
     tabSize?: number;
@@ -95,6 +108,19 @@ export interface AssignmentInfo {
     optional: boolean;
     many: boolean;
     terminalType?: string;
+    separator?: string;
+    isLoopHead?: boolean;
+    isLoopTail?: boolean;
+    position?: number;
+}
+
+export interface ArrayIterationState {
+    property: string;
+    values: unknown[];
+    currentIndex: number;
+    totalElements: number;
+    separator: string;
+    exhausted: boolean;
 }
 
 export interface ActionInfo {

@@ -6,9 +6,9 @@
 
 import type { AstNode, AstReflection, Reference } from '../syntax-tree.js';
 import type { Grammar, AbstractParserRule, ParserRule, Assignment, AbstractElement } from '../languages/generated/ast.js';
-import { isParserRule, isAssignment, isAlternatives, isGroup, isRuleCall, isInfixRule } from '../languages/generated/ast.js';
+import { isParserRule, isAssignment, isAlternatives, isGroup, isRuleCall, isInfixRule, isUnorderedGroup, isKeyword } from '../languages/generated/ast.js';
 import type { ConcreteSyntaxValidationOptions, ValidationResult, ValidationIssue } from './text-serializer.js';
-import { getRuleType, getTypeName, isDataTypeRule, isOptionalCardinality, isArrayCardinality } from '../utils/grammar-utils.js';
+import { getRuleType, getTypeName, isDataTypeRule, isOptionalCardinality, isArrayCardinality, isArrayOperator } from '../utils/grammar-utils.js';
 
 export interface ConcreteSyntaxValidator {
     validate(node: AstNode, options?: ConcreteSyntaxValidationOptions): ValidationResult;
@@ -75,7 +75,6 @@ export class DefaultConcreteSyntaxValidator implements ConcreteSyntaxValidator {
         issues: ValidationIssue[],
         options?: ConcreteSyntaxValidationOptions
     ): void {
-        const assignments = this.collectAssignments(rule);
         const typeInfo = this.getTypeInfo(rule);
 
         if (!this.isTypeCompatible(node.$type, typeInfo)) {
@@ -88,68 +87,189 @@ export class DefaultConcreteSyntaxValidator implements ConcreteSyntaxValidator {
             return;
         }
 
-        for (const assignmentInfo of assignments) {
-            const { assignment, optional, many } = assignmentInfo;
-            const property = assignment.feature;
-            const value = (node as unknown as Record<string, unknown>)[property];
+        const context: ValidationContext = {
+            issues,
+            options,
+            visited: new Set([rule]),
+            outerOptional: false
+        };
 
-            if (value === undefined || value === null) {
-                if (!optional && !many) {
-                    issues.push({
-                        message: `Missing required property '${property}'`,
-                        node,
-                        property,
-                        severity: 'error',
-                        constraint: 'missing-required-property'
-                    });
-                }
-            } else {
-                if (many && !Array.isArray(value)) {
-                    issues.push({
-                        message: `Property '${property}' should be an array (cardinality '*' or '+')`,
-                        node,
-                        property,
-                        severity: 'error',
-                        constraint: 'invalid-cardinality'
-                    });
-                } else if (!many && Array.isArray(value)) {
-                    issues.push({
-                        message: `Property '${property}' should not be an array`,
-                        node,
-                        property,
-                        severity: 'error',
-                        constraint: 'invalid-cardinality'
-                    });
-                }
-
-                if (assignment.operator === '?=' && value !== true && value !== false) {
-                    issues.push({
-                        message: `Property '${property}' with '?=' operator should be boolean`,
-                        node,
-                        property,
-                        severity: 'error',
-                        constraint: 'invalid-value'
-                    });
-                }
-            }
+        const result = this.validateElement(rule.definition, node, context);
+        if (!result.matched && result.errors.length > 0) {
+            issues.push(...result.errors);
         }
+    }
 
-        const nodeProps = new Set(
-            Object.keys(node).filter(k => !k.startsWith('$'))
-        );
-        for (const prop of nodeProps) {
-            const assignment = assignments.find(a => a.assignment.feature === prop);
-            if (!assignment) {
-                const knownProperties = assignments.map(a => a.assignment.feature);
-                issues.push({
-                    message: `Unknown property '${prop}'. Known properties: ${knownProperties.join(', ')}`,
+    protected validateElement(
+        element: AbstractElement,
+        node: AstNode,
+        context: ValidationContext
+    ): ValidationMatchResult {
+        if (isAssignment(element)) {
+            return this.validateAssignment(element, node, context);
+        } else if (isAlternatives(element)) {
+            return this.validateAlternatives(element, node, context);
+        } else if (isUnorderedGroup(element)) {
+            return this.validateUnorderedGroup(element, node, context);
+        } else if (isGroup(element)) {
+            return this.validateGroup(element, node, context);
+        } else if (isRuleCall(element) && isParserRule(element.rule.ref)) {
+            if (!isDataTypeRule(element.rule.ref) && !context.visited.has(element.rule.ref)) {
+                context.visited.add(element.rule.ref);
+                return this.validateElement(element.rule.ref.definition, node, context);
+            }
+        } else if (isKeyword(element)) {
+            return { matched: true, errors: [] };
+        }
+        return { matched: true, errors: [] };
+    }
+
+    protected validateAssignment(
+        assignment: Assignment,
+        node: AstNode,
+        context: ValidationContext
+    ): ValidationMatchResult {
+        const errors: ValidationIssue[] = [];
+        const property = assignment.feature;
+        const value = (node as unknown as Record<string, unknown>)[property];
+        const many = isArrayCardinality(assignment.cardinality) || isArrayOperator(assignment.operator);
+        const optional = isOptionalCardinality(assignment.cardinality) || context.outerOptional || assignment.operator === '?=';
+
+        if (value === undefined || value === null) {
+            if (!optional && !many) {
+                errors.push({
+                    message: `Missing required property '${property}'`,
                     node,
-                    property: prop,
-                    severity: 'warning',
-                    constraint: 'unknown-property'
+                    property,
+                    severity: 'error',
+                    constraint: 'missing-required-property'
                 });
+                return { matched: false, errors };
+            }
+            return { matched: true, errors: [] };
+        }
+
+        if (many && !Array.isArray(value)) {
+            errors.push({
+                message: `Property '${property}' should be an array (cardinality '*' or '+')`,
+                node,
+                property,
+                severity: 'error',
+                constraint: 'invalid-cardinality'
+            });
+        } else if (!many && Array.isArray(value)) {
+            errors.push({
+                message: `Property '${property}' should not be an array`,
+                node,
+                property,
+                severity: 'error',
+                constraint: 'invalid-cardinality'
+            });
+        }
+
+        if (assignment.operator === '?=' && typeof value !== 'boolean') {
+            errors.push({
+                message: `Property '${property}' with '?=' operator should be boolean`,
+                node,
+                property,
+                severity: 'error',
+                constraint: 'invalid-value'
+            });
+        }
+
+        return { matched: errors.filter(e => e.severity === 'error').length === 0, errors };
+    }
+
+    protected validateAlternatives(
+        alternatives: AbstractElement & { elements: AbstractElement[]; cardinality?: '?' | '*' | '+' },
+        node: AstNode,
+        context: ValidationContext
+    ): ValidationMatchResult {
+        const optional = isOptionalCardinality(alternatives.cardinality) || context.outerOptional;
+
+        const results: ValidationMatchResult[] = [];
+
+        for (const alt of alternatives.elements) {
+            const altContext: ValidationContext = {
+                issues: context.issues,
+                options: context.options,
+                visited: new Set(context.visited),
+                outerOptional: context.outerOptional
+            };
+            const result = this.validateElement(alt, node, altContext);
+            results.push(result);
+            if (result.matched) {
+                return { matched: true, errors: [] };
             }
         }
+
+        if (optional) {
+            return { matched: true, errors: [] };
+        }
+
+        const allErrors: ValidationIssue[] = [];
+        for (const result of results) {
+            allErrors.push(...result.errors);
+        }
+
+        const nodeProps = Object.keys(node).filter(k => !k.startsWith('$'));
+        return {
+            matched: false,
+            errors: [{
+                message: `No matching alternative found for properties: ${nodeProps.join(', ')}`,
+                node,
+                severity: 'error',
+                constraint: 'type-mismatch'
+            }]
+        };
+    }
+
+    protected validateUnorderedGroup(
+        unorderedGroup: AbstractElement & { elements: AbstractElement[]; cardinality?: '?' | '*' | '+' },
+        node: AstNode,
+        context: ValidationContext
+    ): ValidationMatchResult {
+        const optional = isOptionalCardinality(unorderedGroup.cardinality) || context.outerOptional;
+        const errors: ValidationIssue[] = [];
+
+        for (const element of unorderedGroup.elements) {
+            const result = this.validateElement(element, node, context);
+            if (!result.matched && !optional) {
+                errors.push(...result.errors);
+            }
+        }
+
+        const hasErrors = errors.filter(e => e.severity === 'error').length > 0;
+        return { matched: !hasErrors, errors };
+    }
+
+    protected validateGroup(
+        group: AbstractElement & { elements: AbstractElement[]; cardinality?: '?' | '*' | '+' },
+        node: AstNode,
+        context: ValidationContext
+    ): ValidationMatchResult {
+        const optional = isOptionalCardinality(group.cardinality);
+        const errors: ValidationIssue[] = [];
+
+        const groupContext: ValidationContext = {
+            issues: context.issues,
+            options: context.options,
+            visited: context.visited,
+            outerOptional: optional || context.outerOptional
+        };
+
+        for (const element of group.elements) {
+            const result = this.validateElement(element, node, groupContext);
+            if (!result.matched && !optional) {
+                errors.push(...result.errors);
+            }
+        }
+
+        const hasErrors = errors.filter(e => e.severity === 'error').length > 0;
+        if (hasErrors && optional) {
+            return { matched: true, errors: [] };
+        }
+        return { matched: !hasErrors, errors };
     }
 
     protected validateProperty(
@@ -162,7 +282,7 @@ export class DefaultConcreteSyntaxValidator implements ConcreteSyntaxValidator {
         if (this.isReference(value)) {
             this.validateReference(node, propertyName, value, issues, options);
         } else if (Array.isArray(value)) {
-            value.forEach((item, index) => {
+            value.forEach((item) => {
                 if (this.isAstNode(item)) {
                     this.validateNode(item, issues, options);
                 }
@@ -188,48 +308,6 @@ export class DefaultConcreteSyntaxValidator implements ConcreteSyntaxValidator {
                 constraint: 'unresolved-reference'
             });
         }
-    }
-
-    protected collectAssignments(rule: ParserRule): AssignmentValidationInfo[] {
-        const assignments: AssignmentValidationInfo[] = [];
-        const visited = new Set<ParserRule>();
-        visited.add(rule);
-        this.collectAssignmentsFromElement(rule.definition, assignments, visited);
-        return assignments;
-    }
-
-    protected collectAssignmentsFromElement(
-        element: AbstractElement,
-        assignments: AssignmentValidationInfo[],
-        visited: Set<ParserRule>
-    ): void {
-        if (isAssignment(element)) {
-            assignments.push({
-                assignment: element,
-                optional: isOptionalCardinality(element.cardinality),
-                many: isArrayCardinality(element.cardinality)
-            });
-        } else if (isAlternatives(element)) {
-            for (const alt of element.elements) {
-                this.collectAssignmentsFromElement(alt, assignments, visited);
-            }
-        } else if (isGroup(element)) {
-            for (const child of element.elements) {
-                this.collectAssignmentsFromElement(child, assignments, visited);
-            }
-        } else if (isRuleCall(element) && isParserRule(element.rule.ref)) {
-            if (!isDataTypeRule(element.rule.ref) && !visited.has(element.rule.ref)) {
-                visited.add(element.rule.ref);
-                const calledAssignments = this.collectAssignmentsFromRule(element.rule.ref, visited);
-                assignments.push(...calledAssignments);
-            }
-        }
-    }
-
-    protected collectAssignmentsFromRule(rule: ParserRule, visited: Set<ParserRule>): AssignmentValidationInfo[] {
-        const assignments: AssignmentValidationInfo[] = [];
-        this.collectAssignmentsFromElement(rule.definition, assignments, visited);
-        return assignments;
     }
 
     protected getTypeInfo(rule: AbstractParserRule): string {
@@ -271,8 +349,14 @@ export class DefaultConcreteSyntaxValidator implements ConcreteSyntaxValidator {
     }
 }
 
-interface AssignmentValidationInfo {
-    assignment: Assignment;
-    optional: boolean;
-    many: boolean;
+interface ValidationContext {
+    issues: ValidationIssue[];
+    options?: ConcreteSyntaxValidationOptions;
+    visited: Set<ParserRule>;
+    outerOptional: boolean;
+}
+
+interface ValidationMatchResult {
+    matched: boolean;
+    errors: ValidationIssue[];
 }

@@ -54,7 +54,25 @@ export class DefaultToStringConverter implements ToStringConverter {
         return this.convertDefault(value);
     }
 
-    protected convertTerminal(value: ValueType, _rule: TerminalRule): string {
+    protected convertTerminal(value: ValueType, rule: TerminalRule): string {
+        const typeName = rule.type?.name?.toLowerCase();
+        if (typeName === 'string') {
+            if (typeof value === 'string') {
+                if (value.length >= 2 && (value.startsWith('"') || value.startsWith("'"))) {
+                    return value;
+                }
+                return ToStringConverter.escapeString(value);
+            }
+        }
+        if (typeName === undefined && typeof value === 'string') {
+            const ruleName = rule.name.toLowerCase();
+            if (ruleName === 'string') {
+                if (value.length >= 2 && (value.startsWith('"') || value.startsWith("'"))) {
+                    return value;
+                }
+                return ToStringConverter.escapeString(value);
+            }
+        }
         return this.convertDefault(value);
     }
 

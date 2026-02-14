@@ -138,35 +138,97 @@ export class GrammarAnalyzer {
         const assignments: AssignmentInfo[] = [];
         const visited = new Set<AbstractParserRule>();
         const definition = isParserRule(rule) ? rule.definition : rule.call;
-        this.collectAssignmentsFromElement(definition, assignments, visited);
+        const positionTracker = new Map<string, number>();
+        this.collectAssignmentsFromElement(definition, assignments, visited, { inArrayLoop: false, separator: null, loopProperty: null }, positionTracker);
         return assignments;
     }
 
-    protected collectAssignmentsFromElement(element: AbstractElement, assignments: AssignmentInfo[], visited: Set<AbstractParserRule>): void {
+    protected collectAssignmentsFromElement(
+        element: AbstractElement,
+        assignments: AssignmentInfo[],
+        visited: Set<AbstractParserRule>,
+        arrayContext: { inArrayLoop: boolean; separator: string | null; loopProperty: string | null },
+        positionTracker: Map<string, number>
+    ): void {
         if (isAssignment(element)) {
+            const many = isArrayCardinality(element.cardinality);
+            const position = positionTracker.get(element.feature) ?? 0;
+            positionTracker.set(element.feature, position + 1);
+
             assignments.push({
                 assignment: element,
                 property: element.feature,
                 operator: element.operator,
                 optional: isOptionalCardinality(element.cardinality, element),
-                many: isArrayCardinality(element.cardinality),
-                terminalType: this.getTerminalType(element.terminal)
+                many,
+                terminalType: this.getTerminalType(element.terminal),
+                separator: arrayContext.separator ?? undefined,
+                isLoopHead: !arrayContext.inArrayLoop && many,
+                isLoopTail: arrayContext.inArrayLoop,
+                position
             });
         } else if (isGroup(element)) {
-            for (const child of element.elements) {
-                this.collectAssignmentsFromElement(child, assignments, visited);
+            if (isArrayCardinality(element.cardinality)) {
+                const pattern = this.analyzeArrayPattern(element);
+                const loopProperty = this.findAssignmentProperty(element);
+
+                if (pattern.separator && loopProperty) {
+                    for (const child of element.elements) {
+                        this.collectAssignmentsFromElement(child, assignments, visited, {
+                            inArrayLoop: true,
+                            separator: pattern.separator,
+                            loopProperty
+                        }, positionTracker);
+                    }
+                } else {
+                    for (const child of element.elements) {
+                        this.collectAssignmentsFromElement(child, assignments, visited, arrayContext, positionTracker);
+                    }
+                }
+            } else {
+                for (const child of element.elements) {
+                    this.collectAssignmentsFromElement(child, assignments, visited, arrayContext, positionTracker);
+                }
             }
         } else if (isAlternatives(element)) {
             for (const alt of element.elements) {
-                this.collectAssignmentsFromElement(alt, assignments, visited);
+                this.collectAssignmentsFromElement(alt, assignments, visited, arrayContext, positionTracker);
             }
         } else if (isRuleCall(element)) {
             const calledRule = element.rule.ref;
             if (isParserRule(calledRule) && !isDataTypeRule(calledRule) && !visited.has(calledRule)) {
                 visited.add(calledRule);
-                this.collectAssignmentsFromElement(calledRule.definition, assignments, visited);
+                this.collectAssignmentsFromElement(calledRule.definition, assignments, visited, arrayContext, positionTracker);
             }
         }
+    }
+
+    protected analyzeArrayPattern(group: { elements: AbstractElement[]; cardinality?: '?' | '*' | '+' }): { separator: string | null } {
+        const elements = group.elements;
+
+        for (let i = 0; i < elements.length; i++) {
+            const el = elements[i];
+            if (isKeyword(el)) {
+                if (i + 1 < elements.length && isAssignment(elements[i + 1])) {
+                    return { separator: el.value };
+                }
+            }
+        }
+
+        return { separator: null };
+    }
+
+    protected findAssignmentProperty(element: AbstractElement): string | null {
+        if (isAssignment(element)) {
+            return element.feature;
+        }
+        if (isGroup(element) || isAlternatives(element)) {
+            for (const child of element.elements) {
+                const prop = this.findAssignmentProperty(child);
+                if (prop) return prop;
+            }
+        }
+        return null;
     }
 
     protected getTerminalType(element: AbstractElement): string | undefined {

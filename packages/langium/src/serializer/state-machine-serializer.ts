@@ -6,13 +6,13 @@
 
 import type { AstNode, Reference, AstReflection } from '../syntax-tree.js';
 import type { Grammar, AbstractParserRule, ParserRule, AbstractElement, Assignment, Keyword, RuleCall, CrossReference } from '../languages/generated/ast.js';
-import { isParserRule, isAssignment, isKeyword, isRuleCall, isCrossReference, isGroup, isAlternatives, isAction, isTerminalRule } from '../languages/generated/ast.js';
-import type { TextSerializer, TextSerializeOptions, SerializationContext, AmbiguityResolver, SerializationChoice } from './text-serializer.js';
+import { isParserRule, isAssignment, isKeyword, isRuleCall, isCrossReference, isGroup, isAlternatives, isAction, isTerminalRule, isUnorderedGroup } from '../languages/generated/ast.js';
+import type { TextSerializer, TextSerializeOptions, SerializationContext, AmbiguityResolver, SerializationChoice, ArrayIterationState, SerializeValueContext } from './text-serializer.js';
 import { createSerializationError } from './text-serializer.js';
 import { GrammarAnalyzer } from './grammar-analyzer.js';
 import { DefaultConcreteSyntaxValidator, type ConcreteSyntaxValidator } from './concrete-syntax-validator.js';
 import { DefaultContextResolver, type ContextResolver } from './context-resolver.js';
-import { getTypeName, isDataTypeRule, isOptionalCardinality, isArrayCardinality } from '../utils/grammar-utils.js';
+import { getTypeName, isDataTypeRule, isOptionalCardinality, isArrayCardinality, isArrayOperator } from '../utils/grammar-utils.js';
 import type { LangiumCoreServices } from '../services.js';
 import type { ToStringConverter } from './to-string-converter.js';
 
@@ -29,9 +29,11 @@ export interface SerializationTransition {
 }
 
 export interface TransitionConstraint {
-    type: 'property-present' | 'property-absent' | 'type-match' | 'value-match';
+    type: 'property-present' | 'property-absent' | 'type-match' | 'value-match' | 'group-present' | 'group-absent' | 'array-has-more' | 'array-exhausted';
     property?: string;
+    properties?: string[];
     value?: unknown;
+    arrayProperty?: string;
 }
 
 export interface StateMachineInfo {
@@ -116,12 +118,15 @@ export class StateMachineSerializer implements TextSerializer {
             this.stateMachines.set(smKey, stateMachine);
         }
 
+        const arrayStates = this.initializeArrayStates(node);
+
         const output: string[] = [];
         let state = stateMachine.startState;
         const resolver = this.getAmbiguityResolver(options);
+        const spaceChar = options?.space ?? ' ';
 
         while (!state.isEnd) {
-            const matchingTransitions = this.findMatchingTransitions(state, node);
+            const matchingTransitions = this.findMatchingTransitions(state, node, arrayStates);
             if (matchingTransitions.length === 0) {
                 throw createSerializationError(
                     `No valid transition found at state '${state.id}'`,
@@ -132,17 +137,37 @@ export class StateMachineSerializer implements TextSerializer {
             }
 
             const transition = this.resolveTransition(matchingTransitions, resolver, node);
-            const text = this.serializeTransition(transition, node, options);
-            output.push(text);
+            const text = this.serializeTransition(transition, node, options, arrayStates);
+            if (text.length > 0) {
+                output.push(text);
+            }
             state = transition.target;
         }
 
-        let result = output.join('');
+        let result = output.join(spaceChar);
         if (options?.format) {
             result = this.formatOutput(result, options);
         }
 
         return result;
+    }
+
+protected initializeArrayStates(node: AstNode): Map<string, ArrayIterationState> {
+        const states = new Map<string, ArrayIterationState>();
+        for (const [key, value] of Object.entries(node)) {
+            if (key.startsWith('$')) continue;
+            if (Array.isArray(value)) {
+                states.set(key, {
+                    property: key,
+                    values: value,
+                    currentIndex: 0,
+                    totalElements: value.length,
+                    separator: ',',
+                    exhausted: value.length === 0
+                });
+            }
+        }
+        return states;
     }
 
     protected buildStateMachines(): void {
@@ -192,20 +217,68 @@ export class StateMachineSerializer implements TextSerializer {
                 target: endState
             });
         } else if (isAssignment(element)) {
-            currentState.transitions.push({
-                element,
-                target: endState,
-                constraint: {
-                    type: 'property-present',
-                    property: element.feature
-                }
-            });
-
-            if (isOptionalCardinality(element.cardinality, element)) {
+            const isArray = isArrayCardinality(element.cardinality) || isArrayOperator(element.operator);
+            
+            if (isArray && isArrayCardinality(element.cardinality)) {
                 currentState.transitions.push({
                     element: { $type: 'Keyword', value: '' } as Keyword,
-                    target: endState
+                    target: endState,
+                    constraint: {
+                        type: 'array-exhausted',
+                        arrayProperty: element.feature
+                    }
                 });
+
+                const loopBodyStart = createState();
+                currentState.transitions.push({
+                    element: { $type: 'Keyword', value: '' } as Keyword,
+                    target: loopBodyStart,
+                    constraint: {
+                        type: 'array-has-more',
+                        arrayProperty: element.feature
+                    }
+                });
+
+                loopBodyStart.transitions.push({
+                    element,
+                    target: currentState,
+                    constraint: {
+                        type: 'property-present',
+                        property: element.feature
+                    }
+                });
+            } else {
+                currentState.transitions.push({
+                    element,
+                    target: endState,
+                    constraint: {
+                        type: 'property-present',
+                        property: element.feature
+                    }
+                });
+
+                if (isOptionalCardinality(element.cardinality, element) || element.operator === '?=') {
+                    const parent = element.$container;
+                    const hasFalseKeywordAlternative = isAlternatives(parent) && parent.elements.some(e =>
+                        isKeyword(e) && e.value === 'false');
+                    
+                    if (element.operator === '?=' && hasFalseKeywordAlternative) {
+                    } else if (element.operator === '?=') {
+                        currentState.transitions.push({
+                            element: { $type: 'Keyword', value: '' } as Keyword,
+                            target: endState,
+                            constraint: {
+                                type: 'property-absent',
+                                property: element.feature
+                            }
+                        });
+                    } else {
+                        currentState.transitions.push({
+                            element: { $type: 'Keyword', value: '' } as Keyword,
+                            target: endState
+                        });
+                    }
+                }
             }
         } else if (isRuleCall(element)) {
             const calledRule = element.rule.ref;
@@ -243,14 +316,105 @@ export class StateMachineSerializer implements TextSerializer {
             let state = currentState;
             const childElements = [...element.elements];
 
+            const groupAssignments = this.collectGroupAssignments(element);
+            const groupProperty = this.findFirstArrayProperty(element) ?? (groupAssignments.length > 0 ? groupAssignments[0] : undefined);
+
             if (isOptionalCardinality(element.cardinality)) {
-                const afterOptionalState = endState;
                 currentState.transitions.push({
                     element: { $type: 'Keyword', value: '' } as Keyword,
-                    target: afterOptionalState
+                    target: endState,
+                    constraint: {
+                        type: 'group-absent',
+                        properties: groupAssignments
+                    }
                 });
             }
 
+            if (isArrayCardinality(element.cardinality) && groupProperty) {
+                const loopBodyStart = createState();
+
+                currentState.transitions.push({
+                    element: { $type: 'Keyword', value: '' } as Keyword,
+                    target: endState,
+                    constraint: {
+                        type: 'array-exhausted',
+                        arrayProperty: groupProperty
+                    }
+                });
+
+                currentState.transitions.push({
+                    element: { $type: 'Keyword', value: '' } as Keyword,
+                    target: loopBodyStart,
+                    constraint: {
+                        type: 'array-has-more',
+                        arrayProperty: groupProperty
+                    }
+                });
+
+                let loopState = loopBodyStart;
+                for (let i = 0; i < childElements.length; i++) {
+                    const child = childElements[i];
+                    const isLast = i === childElements.length - 1;
+                    const targetState = isLast ? currentState : createState();
+
+                    this.buildStateMachineFromElement(child, loopState, targetState, states, createState, currentTypeName);
+
+                    if (!isLast) {
+                        loopState = targetState;
+                    }
+                }
+            } else {
+                for (let i = 0; i < childElements.length; i++) {
+                    const child = childElements[i];
+                    const isLast = i === childElements.length - 1;
+                    const targetState = isLast ? endState : createState();
+
+                    this.buildStateMachineFromElement(child, state, targetState, states, createState, currentTypeName);
+
+                    if (!isLast) {
+                        state = targetState;
+                    }
+                }
+            }
+        } else if (isAlternatives(element)) {
+            for (const alt of element.elements) {
+                if (isGroup(alt)) {
+                    const altAssignments = this.collectGroupAssignments(alt);
+                    const groupBodyStart = createState();
+                    currentState.transitions.push({
+                        element: { $type: 'Keyword', value: '' } as Keyword,
+                        target: groupBodyStart,
+                        constraint: {
+                            type: 'group-present',
+                            properties: altAssignments
+                        }
+                    });
+                    this.buildStateMachineFromElement(alt, groupBodyStart, endState, states, createState, currentTypeName);
+                } else if (isKeyword(alt)) {
+                    const hasBooleanAssignment = element.elements.some(e =>
+                        isAssignment(e) && e.operator === '?=');
+                    if (hasBooleanAssignment && alt.value === 'false') {
+                        const boolAssign = element.elements.find(e =>
+                            isAssignment(e) && e.operator === '?=') as Assignment;
+                        currentState.transitions.push({
+                            element: alt,
+                            target: endState,
+                            constraint: {
+                                type: 'value-match',
+                                property: boolAssign.feature,
+                                value: false
+                            }
+                        });
+                    } else {
+                        this.buildStateMachineFromElement(alt, currentState, endState, states, createState, currentTypeName);
+                    }
+                } else {
+                    this.buildStateMachineFromElement(alt, currentState, endState, states, createState, currentTypeName);
+                }
+            }
+        } else if (isUnorderedGroup(element)) {
+            let state = currentState;
+            const childElements = [...element.elements];
             for (let i = 0; i < childElements.length; i++) {
                 const child = childElements[i];
                 const isLast = i === childElements.length - 1;
@@ -262,32 +426,40 @@ export class StateMachineSerializer implements TextSerializer {
                     state = targetState;
                 }
             }
-
-            if (isArrayCardinality(element.cardinality)) {
-                const loopState = currentState;
-                endState.transitions.push({
-                    element: { $type: 'Keyword', value: '' } as Keyword,
-                    target: loopState
-                });
-            }
-        } else if (isAlternatives(element)) {
-            for (const alt of element.elements) {
-                this.buildStateMachineFromElement(alt, currentState, endState, states, createState, currentTypeName);
-            }
         }
     }
 
-    protected findMatchingTransitions(state: SerializationState, node: AstNode): SerializationTransition[] {
-        return state.transitions.filter(t => this.matchesConstraint(t, node));
+    protected findMatchingTransitions(state: SerializationState, node: AstNode, arrayStates?: Map<string, ArrayIterationState>): SerializationTransition[] {
+        return state.transitions.filter(t => this.matchesConstraint(t, node, arrayStates));
     }
 
-    protected matchesConstraint(transition: SerializationTransition, node: AstNode): boolean {
+    protected matchesConstraint(transition: SerializationTransition, node: AstNode, arrayStates?: Map<string, ArrayIterationState>): boolean {
         const constraint = transition.constraint;
+        const element = transition.element;
+
+        if (isKeyword(element)) {
+            const parent = element.$container;
+            if (parent && 'elements' in parent && Array.isArray((parent as { elements: unknown[] }).elements)) {
+                const altParent = parent as { elements: AbstractElement[] };
+                for (const sibling of altParent.elements) {
+                    if (isAssignment(sibling) && sibling.operator === '?=') {
+                        const property = sibling.feature;
+                        const value = (node as unknown as Record<string, unknown>)[property];
+                        if (value === false && element.value === 'false') {
+                            return true;
+                        }
+                        if (value === false && element.value !== 'false') {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+
         if (!constraint) {
             return true;
         }
 
-        const element = transition.element;
         if (isAssignment(element)) {
             const property = element.feature;
             const value = (node as unknown as Record<string, unknown>)[property];
@@ -299,6 +471,9 @@ export class StateMachineSerializer implements TextSerializer {
                 if (Array.isArray(value) && value.length === 0 && !isOptionalCardinality(element.cardinality, element)) {
                     return false;
                 }
+                if (element.operator === '?=') {
+                    return value === true;
+                }
             }
         }
 
@@ -306,7 +481,99 @@ export class StateMachineSerializer implements TextSerializer {
             return node.$type === constraint.value;
         }
 
+        if (constraint.type === 'group-present') {
+            const properties = constraint.properties ?? [];
+            for (const prop of properties) {
+                const value = (node as unknown as Record<string, unknown>)[prop];
+                if (value !== undefined && value !== null) {
+                    if (Array.isArray(value)) {
+                        if (value.length > 0) return true;
+                    } else {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        if (constraint.type === 'group-absent') {
+            const properties = constraint.properties ?? [];
+            for (const prop of properties) {
+                const value = (node as unknown as Record<string, unknown>)[prop];
+                if (value !== undefined && value !== null) {
+                    if (Array.isArray(value)) {
+                        if (value.length > 0) return false;
+                    } else {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        if (constraint.type === 'array-has-more') {
+            const prop = constraint.arrayProperty ?? constraint.property;
+            if (!prop || !arrayStates) return false;
+            const state = arrayStates.get(prop);
+            return state !== undefined && !state.exhausted && state.currentIndex < state.totalElements;
+        }
+
+        if (constraint.type === 'array-exhausted') {
+            const prop = constraint.arrayProperty ?? constraint.property;
+            if (!prop || !arrayStates) return true;
+            const state = arrayStates.get(prop);
+            return state === undefined || state.exhausted || state.currentIndex >= state.totalElements;
+        }
+
+        if (constraint.type === 'value-match' && constraint.property) {
+            const value = (node as unknown as Record<string, unknown>)[constraint.property];
+            if (constraint.value === undefined) {
+                return value === undefined || value === null;
+            }
+            return value === constraint.value;
+        }
+
+        if (constraint.type === 'property-absent' && constraint.property) {
+            const value = (node as unknown as Record<string, unknown>)[constraint.property];
+            if (value === false) {
+                const parent = transition.element.$container;
+                const hasFalseKeywordAlternative = isAlternatives(parent) && parent.elements.some((e: AbstractElement) =>
+                    isKeyword(e) && e.value === 'false');
+                return !hasFalseKeywordAlternative;
+            }
+            return value === undefined || value === null;
+        }
+
         return true;
+    }
+
+    protected collectGroupAssignments(group: AbstractElement): string[] {
+        const assignments: string[] = [];
+        this.collectAssignmentsFromElement(group, assignments);
+        return assignments;
+    }
+
+    protected collectAssignmentsFromElement(element: AbstractElement, assignments: string[]): void {
+        if (isAssignment(element)) {
+            assignments.push(element.feature);
+        } else if (isGroup(element) || isAlternatives(element)) {
+            for (const child of element.elements) {
+                this.collectAssignmentsFromElement(child, assignments);
+            }
+        }
+    }
+
+    protected findFirstArrayProperty(element: AbstractElement): string | undefined {
+        if (isAssignment(element) && (isArrayCardinality(element.cardinality) || element.operator === '+=')) {
+            return element.feature;
+        }
+        if (isGroup(element) || isAlternatives(element)) {
+            for (const child of element.elements) {
+                const prop = this.findFirstArrayProperty(child);
+                if (prop) return prop;
+            }
+        }
+        return undefined;
     }
 
     protected resolveTransition(
@@ -342,7 +609,7 @@ export class StateMachineSerializer implements TextSerializer {
         } else if (isCrossReference(element)) {
             return `cross reference to '${element.type.ref?.name ?? 'unknown'}'`;
         } else if (isAction(element)) {
-            return `action`;
+            return 'action';
         }
         return 'unknown element';
     }
@@ -350,7 +617,8 @@ export class StateMachineSerializer implements TextSerializer {
     protected serializeTransition(
         transition: SerializationTransition,
         node: AstNode,
-        options?: TextSerializeOptions
+        options?: TextSerializeOptions,
+        arrayStates?: Map<string, ArrayIterationState>
     ): string {
         const element = transition.element;
 
@@ -359,7 +627,7 @@ export class StateMachineSerializer implements TextSerializer {
         }
 
         if (isAssignment(element)) {
-            return this.serializeAssignment(element, node, options);
+            return this.serializeAssignment(element, node, options, arrayStates);
         }
 
         if (isRuleCall(element)) {
@@ -380,26 +648,49 @@ export class StateMachineSerializer implements TextSerializer {
     protected serializeAssignment(
         assignment: Assignment,
         node: AstNode,
-        options?: TextSerializeOptions
+        options?: TextSerializeOptions,
+        arrayStates?: Map<string, ArrayIterationState>
     ): string {
         const property = assignment.feature;
         const value = (node as unknown as Record<string, unknown>)[property];
+
+        if (assignment.operator === '?=') {
+            if (value === true) {
+                if (isKeyword(assignment.terminal)) {
+                    return assignment.terminal.value;
+                }
+                return '';
+            }
+            return '';
+        }
 
         if (value === undefined || value === null) {
             return '';
         }
 
-        if (isArrayCardinality(assignment.cardinality) && Array.isArray(value)) {
-            return this.serializeArrayValue(assignment, value, options);
+        const isArray = isArrayCardinality(assignment.cardinality) || isArrayOperator(assignment.operator);
+        if (isArray && Array.isArray(value)) {
+            if (arrayStates) {
+                const state = arrayStates.get(property);
+                if (state && state.currentIndex < state.totalElements) {
+                    const element = state.values[state.currentIndex];
+                    state.currentIndex++;
+                    state.exhausted = state.currentIndex >= state.totalElements;
+                    return this.serializeValue(element, assignment.terminal, options, node, property);
+                }
+                return '';
+            }
+            return this.serializeArrayValue(assignment, value, options, node);
         }
 
-        return this.serializeValue(value, assignment.terminal, options);
+        return this.serializeValue(value, assignment.terminal, options, node, property);
     }
 
     protected serializeArrayValue(
         assignment: Assignment,
         values: unknown[],
-        options?: TextSerializeOptions
+        options?: TextSerializeOptions,
+        node?: AstNode
     ): string {
         const parts: string[] = [];
 
@@ -407,16 +698,45 @@ export class StateMachineSerializer implements TextSerializer {
             if (i > 0) {
                 parts.push(',');
             }
-            parts.push(this.serializeValue(values[i], assignment.terminal, options));
+            parts.push(this.serializeValue(values[i], assignment.terminal, options, node, assignment.feature));
         }
 
         return parts.join('');
     }
 
-    protected serializeValue(value: unknown, terminal: AbstractElement, options?: TextSerializeOptions): string {
+    protected serializeValue(value: unknown, terminal: AbstractElement, options?: TextSerializeOptions, node?: AstNode, property?: string): string {
+        if (options?.serializeValue && node && property) {
+            const ruleName = this.getRuleName(terminal);
+            const ctx: SerializeValueContext = {
+                node,
+                property,
+                value,
+                ruleName,
+                languageId: this.grammar.name ?? 'unknown'
+            };
+            const hookResult = options.serializeValue(ctx);
+            if (hookResult !== undefined) {
+                return hookResult;
+            }
+        }
         if (this.isAstNode(value)) {
             const context = this.contextResolver.findContext(value);
             return context ? this.serializeNode(value, context, options) : '';
+        }
+        if (this.isReference(value)) {
+            let refText = value.$refText;
+            if (!refText || options?.useRefText === false) {
+                if (value.ref) {
+                    refText = this.nameProvider.getName(value.ref) ?? '';
+                }
+            }
+            if (refText) {
+                if (isRuleCall(terminal) && terminal.rule.ref) {
+                    return this.toStringConverter.convertWithRule(refText, terminal.rule.ref);
+                }
+                return refText;
+            }
+            return '';
         }
         if (isRuleCall(terminal)) {
             const rule = terminal.rule.ref;
@@ -434,6 +754,13 @@ export class StateMachineSerializer implements TextSerializer {
             return value.toISOString();
         }
         return String(value);
+    }
+
+    protected getRuleName(terminal: AbstractElement): string {
+        if (isRuleCall(terminal) && terminal.rule.ref) {
+            return terminal.rule.ref.name;
+        }
+        return '';
     }
 
     protected serializeRuleCall(
@@ -478,7 +805,7 @@ export class StateMachineSerializer implements TextSerializer {
             refText = nodeValue.$refText;
             const refNode = nodeValue.ref;
             if (refNode && !refText) {
-                refText = this.nameProvider.getName(refNode);
+                refText = this.nameProvider.getName(refNode) ?? '';
             }
         }
 
