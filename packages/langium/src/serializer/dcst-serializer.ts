@@ -14,6 +14,7 @@ import { DefaultConcreteSyntaxValidator, type ConcreteSyntaxValidator } from './
 import { DefaultContextResolver, type ContextResolver } from './context-resolver.js';
 import { isDataTypeRule, isArrayCardinality } from '../utils/grammar-utils.js';
 import type { LangiumCoreServices } from '../services.js';
+import type { ToStringConverter } from './to-string-converter.js';
 
 export type DCSTNode = TerminalNode | NonTerminalNode | DisjunctionNode;
 
@@ -58,6 +59,7 @@ export class DCSTSerializer implements TextSerializer {
     protected readonly contextResolver: ContextResolver;
     protected readonly grammarAnalyzer: GrammarAnalyzer;
     protected readonly nameProvider: { getName(node: AstNode): string | undefined };
+    protected readonly toStringConverter: ToStringConverter;
 
     constructor(services: LangiumCoreServices) {
         this.grammar = services.Grammar;
@@ -66,6 +68,7 @@ export class DCSTSerializer implements TextSerializer {
         this.contextResolver = new DefaultContextResolver(this.grammar);
         this.grammarAnalyzer = new GrammarAnalyzer(this.grammar);
         this.nameProvider = services.references.NameProvider;
+        this.toStringConverter = services.serializer.ToStringConverter;
     }
 
     serialize(node: AstNode, options?: TextSerializeOptions): string {
@@ -193,7 +196,7 @@ export class DCSTSerializer implements TextSerializer {
         return nodes;
     }
 
-    protected describeTerminal(terminal: AbstractElement, value: unknown, node: AstNode): DCSTNode[] {
+    protected describeTerminal(terminal: AbstractElement, value: unknown, _node: AstNode): DCSTNode[] {
         if (isKeyword(terminal)) {
             return [{
                 kind: 'terminal',
@@ -206,9 +209,10 @@ export class DCSTSerializer implements TextSerializer {
             const rule = terminal.rule.ref;
             if (isParserRule(rule)) {
                 if (isDataTypeRule(rule)) {
+                    const text = this.toStringConverter.convertWithRule(value as string | number | boolean | bigint | Date, rule);
                     return [{
                         kind: 'terminal',
-                        text: String(value),
+                        text,
                         grammarElement: terminal
                     }];
                 } else {
@@ -218,9 +222,10 @@ export class DCSTSerializer implements TextSerializer {
                     }
                 }
             } else if (isTerminalRule(rule)) {
+                const text = this.toStringConverter.convertWithRule(value as string | number | boolean | bigint | Date, rule);
                 return [{
                     kind: 'terminal',
-                    text: String(value),
+                    text,
                     grammarElement: terminal
                 }];
             }
@@ -230,7 +235,7 @@ export class DCSTSerializer implements TextSerializer {
             const refText = this.isReference(value) ? value.$refText : String(value);
             const innerTerminal = terminal.terminal;
             if (innerTerminal) {
-                return this.describeTerminal(innerTerminal, refText, node);
+                return this.describeTerminal(innerTerminal, refText, _node);
             }
             return [{
                 kind: 'terminal',
@@ -267,9 +272,35 @@ export class DCSTSerializer implements TextSerializer {
         }
 
         const value = (node as unknown as Record<string, unknown>)[assignment.feature];
-        const refText = this.isReference(value) ? value.$refText : '';
+        let refText: string;
+
+        if (this.isReference(value)) {
+            refText = value.$refText;
+            const refNode = value.ref;
+            if (refNode && !refText) {
+                refText = this.nameProvider.getName(refNode) ?? '';
+            }
+        } else {
+            refText = '';
+        }
 
         if (crossRef.terminal) {
+            if (isRuleCall(crossRef.terminal) && crossRef.terminal.rule.ref) {
+                const text = this.toStringConverter.convertWithRule(refText, crossRef.terminal.rule.ref);
+                return [{
+                    kind: 'terminal',
+                    text,
+                    grammarElement: crossRef
+                }];
+            }
+            if (isTerminalRule(crossRef.terminal)) {
+                const text = this.toStringConverter.convertWithRule(refText, crossRef.terminal);
+                return [{
+                    kind: 'terminal',
+                    text,
+                    grammarElement: crossRef
+                }];
+            }
             return this.describeTerminal(crossRef.terminal, refText, node);
         }
 

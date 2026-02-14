@@ -414,18 +414,24 @@ export class StateMachineSerializer implements TextSerializer {
     }
 
     protected serializeValue(value: unknown, terminal: AbstractElement, options?: TextSerializeOptions): string {
-        if (typeof value === 'string') {
-            return value;
-        }
-        if (typeof value === 'number') {
-            return String(value);
-        }
-        if (typeof value === 'boolean') {
-            return String(value);
-        }
         if (this.isAstNode(value)) {
             const context = this.contextResolver.findContext(value);
             return context ? this.serializeNode(value, context, options) : '';
+        }
+        if (isRuleCall(terminal)) {
+            const rule = terminal.rule.ref;
+            if (rule) {
+                return this.toStringConverter.convertWithRule(value as string | number | boolean | bigint | Date, rule);
+            }
+        }
+        if (typeof value === 'string') {
+            return value;
+        }
+        if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+            return String(value);
+        }
+        if (value instanceof Date) {
+            return value.toISOString();
         }
         return String(value);
     }
@@ -441,7 +447,7 @@ export class StateMachineSerializer implements TextSerializer {
         }
 
         if (isTerminalRule(rule)) {
-            return '';
+            return this.toStringConverter.convertWithRule(node.$type as unknown as string | number | boolean | bigint | Date, rule);
         }
 
         if (isParserRule(rule) && !isDataTypeRule(rule)) {
@@ -453,6 +459,10 @@ export class StateMachineSerializer implements TextSerializer {
             return this.serializeNode(node, context, options);
         }
 
+        if (isParserRule(rule) && isDataTypeRule(rule)) {
+            return this.toStringConverter.convertWithRule(node.$type as unknown as string | number | boolean | bigint | Date, rule);
+        }
+
         return '';
     }
 
@@ -461,27 +471,30 @@ export class StateMachineSerializer implements TextSerializer {
         node: AstNode,
         options?: TextSerializeOptions
     ): string {
-        const terminal = crossRef.terminal;
-        if (terminal) {
-            return '';
-        }
-
-        const typeName = crossRef.type.ref?.name;
-        if (!typeName) {
-            return '';
-        }
-
-        const nameAssignment = this.findNameAssignmentForType(typeName);
-        if (!nameAssignment) {
-            return '';
-        }
-
         const nodeValue = this.getPropertyValue(node, crossRef);
+        let refText: string | undefined;
+
         if (this.isReference(nodeValue)) {
-            return nodeValue.$refText || '';
+            refText = nodeValue.$refText;
+            const refNode = nodeValue.ref;
+            if (refNode && !refText) {
+                refText = this.nameProvider.getName(refNode);
+            }
         }
 
-        return '';
+        if (!refText) {
+            return '';
+        }
+
+        const terminal = crossRef.terminal;
+        if (terminal && isRuleCall(terminal) && terminal.rule.ref) {
+            return this.toStringConverter.convertWithRule(refText, terminal.rule.ref);
+        }
+        if (terminal && isTerminalRule(terminal)) {
+            return this.toStringConverter.convertWithRule(refText, terminal);
+        }
+
+        return refText;
     }
 
     protected findNameAssignmentForType(typeName: string): Assignment | undefined {

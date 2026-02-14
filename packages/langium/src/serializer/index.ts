@@ -12,3 +12,4 @@ export * from './context-resolver.js';
 export * from './grammar-analyzer.js';
 export * from './state-machine-serializer.js';
 export * from './dcst-serializer.js';
+export * from './to-string-converter.js';
