@@ -18,6 +18,7 @@ import { DefaultReferences } from './references/references.js';
 import { DefaultScopeComputation } from './references/scope-computation.js';
 import { DefaultScopeProvider } from './references/scope-provider.js';
 import { DefaultJsonSerializer } from './serializer/json-serializer.js';
+import { StateMachineSerializer } from './serializer/state-machine-serializer.js';
 import { DefaultServiceRegistry } from './service-registry.js';
 import { DefaultDocumentValidator } from './validation/document-validator.js';
 import { ValidationRegistry } from './validation/validation-registry.js';
@@ -35,6 +36,7 @@ import { LangiumParserErrorMessageProvider } from './parser/langium-parser.js';
 import { DefaultAsyncParser } from './parser/async-parser.js';
 import { DefaultWorkspaceLock } from './workspace/workspace-lock.js';
 import { DefaultHydrator } from './serializer/hydrator.js';
+import { DefaultToStringConverter } from './serializer/to-string-converter.js';
 
 /**
  * Context required for creating the default language-specific dependency injection module.
@@ -78,7 +80,9 @@ export function createDefaultCoreModule(context: DefaultCoreModuleContext): Modu
         },
         serializer: {
             Hydrator: (services) => new DefaultHydrator(services),
-            JsonSerializer: (services) => new DefaultJsonSerializer(services)
+            JsonSerializer: (services) => new DefaultJsonSerializer(services),
+            TextSerializer: (services) => new StateMachineSerializer(services),
+            ToStringConverter: (services) => new DefaultToStringConverter(services.Grammar)
         },
         validation: {
             DocumentValidator: (services) => new DefaultDocumentValidator(services),

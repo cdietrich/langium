@@ -36,6 +36,8 @@ import type { FileSystemProvider } from './workspace/file-system-provider.js';
 import type { IndexManager } from './workspace/index-manager.js';
 import type { WorkspaceLock } from './workspace/workspace-lock.js';
 import type { Hydrator } from './serializer/hydrator.js';
+import type { TextSerializer } from './serializer/text-serializer.js';
+import type { ToStringConverter } from './serializer/to-string-converter.js';
 import type { WorkspaceManager } from './workspace/workspace-manager.js';
 import type { LangiumProfiler } from './workspace/profiler.js';
 
@@ -80,6 +82,8 @@ export type LangiumDefaultCoreServices = {
     readonly serializer: {
         readonly Hydrator: Hydrator
         readonly JsonSerializer: JsonSerializer
+        readonly TextSerializer: TextSerializer
+        readonly ToStringConverter: ToStringConverter
     }
     readonly validation: {
         readonly DocumentValidator: DocumentValidator
