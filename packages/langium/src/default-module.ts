@@ -2,11 +2,8 @@
  * Copyright 2021 TypeFox GmbH
  * This program and the accompanying materials are made available under the
  * terms of the MIT License, which is available in the project root.
-******************************************************************************/
+ ******************************************************************************/
 
-import type { Module } from './dependency-injection.js';
-import type { LangiumDefaultCoreServices, LangiumDefaultSharedCoreServices, LangiumCoreServices, LangiumSharedCoreServices } from './services.js';
-import type { FileSystemProvider } from './workspace/file-system-provider.js';
 import { createGrammarConfig } from './languages/grammar-config.js';
 import { createCompletionParser } from './parser/completion-parser-builder.js';
 import { createLangiumParser } from './parser/langium-parser-builder.js';
@@ -18,6 +15,8 @@ import { DefaultReferences } from './references/references.js';
 import { DefaultScopeComputation } from './references/scope-computation.js';
 import { DefaultScopeProvider } from './references/scope-provider.js';
 import { DefaultJsonSerializer } from './serializer/json-serializer.js';
+import { DefaultTextSerializer } from './serializer/text-serializer.js';
+import { DefaultToStringConverterService } from './serializer/to-string-converter.js';
 import { DefaultServiceRegistry } from './service-registry.js';
 import { DefaultDocumentValidator } from './validation/document-validator.js';
 import { ValidationRegistry } from './validation/validation-registry.js';
@@ -35,12 +34,22 @@ import { LangiumParserErrorMessageProvider } from './parser/langium-parser.js';
 import { DefaultAsyncParser } from './parser/async-parser.js';
 import { DefaultWorkspaceLock } from './workspace/workspace-lock.js';
 import { DefaultHydrator } from './serializer/hydrator.js';
+import { Module } from './dependency-injection.js';
+import type { LangiumCoreServices, LangiumDefaultCoreServices, LangiumDefaultSharedCoreServices, LangiumSharedCoreServices } from './services.js';
+import type { FileSystemProvider } from './workspace/file-system-provider.js';
 
 /**
  * Context required for creating the default language-specific dependency injection module.
  */
 export interface DefaultCoreModuleContext {
-    shared: LangiumSharedCoreServices;
+    readonly shared: LangiumSharedCoreServices;
+}
+
+/**
+ * Context required for creating the default shared dependency injection module.
+ */
+export interface DefaultSharedCoreModuleContext {
+    readonly fileSystemProvider: (services: LangiumSharedCoreServices) => FileSystemProvider;
 }
 
 /**
@@ -78,7 +87,9 @@ export function createDefaultCoreModule(context: DefaultCoreModuleContext): Modu
         },
         serializer: {
             Hydrator: (services) => new DefaultHydrator(services),
-            JsonSerializer: (services) => new DefaultJsonSerializer(services)
+            JsonSerializer: (services) => new DefaultJsonSerializer(services),
+            TextSerializer: (services) => new DefaultTextSerializer(services),
+            ToStringConverter: () => new DefaultToStringConverterService()
         },
         validation: {
             DocumentValidator: (services) => new DefaultDocumentValidator(services),
@@ -86,20 +97,6 @@ export function createDefaultCoreModule(context: DefaultCoreModuleContext): Modu
         },
         shared: () => context.shared
     };
-}
-
-/**
- * Context required for creating the default shared dependency injection module.
- */
-export interface DefaultSharedCoreModuleContext {
-    /**
-     * Factory function to create a {@link FileSystemProvider}.
-     *
-     * Langium exposes an `EmptyFileSystem` and `NodeFileSystem`, exported through `langium/node`.
-     * When running Langium as part of a vscode language server or a Node.js app, using the `NodeFileSystem` is recommended,
-     * the `EmptyFileSystem` in every other use case.
-     */
-    fileSystemProvider: (services: LangiumSharedCoreServices) => FileSystemProvider;
 }
 
 /**
@@ -115,7 +112,7 @@ export function createDefaultSharedCoreModule(context: DefaultSharedCoreModuleCo
             DocumentBuilder: (services) => new DefaultDocumentBuilder(services),
             IndexManager: (services) => new DefaultIndexManager(services),
             WorkspaceManager: (services) => new DefaultWorkspaceManager(services),
-            FileSystemProvider: (services) => context.fileSystemProvider(services),
+            FileSystemProvider: (services: LangiumSharedCoreServices) => context.fileSystemProvider(services),
             WorkspaceLock: () => new DefaultWorkspaceLock(),
             ConfigurationProvider: (services) => new DefaultConfigurationProvider(services),
         },
