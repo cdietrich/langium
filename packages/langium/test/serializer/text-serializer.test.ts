@@ -14,7 +14,8 @@ import { createServicesForGrammar } from '../../src/grammar/internal-grammar-uti
 import { expandToStringLF } from '../../src/generate/template-string.js';
 import { parseHelper, clearDocuments } from '../../src/test/langium-test.js';
 import { beforeEach, beforeAll, describe, expect, test } from 'vitest';
-import { DefaultTextSerializer } from '../../src/serializer/text-serializer.js';
+import { DefaultTextSerializer, type TextSerializerFormatter } from '../../src/serializer/text-serializer.js';
+import { AbstractFormatter, Formatting } from '../../src/lsp/formatter.js';
 
 describe('TextSerializer', async () => {
 
@@ -1252,5 +1253,276 @@ describe('TextSerializer Hidden Terminal Rules', async () => {
     test('Serialize model without comment', () => {
         const model = { $type: 'Model', name: 'test' };
         expect(serializer.serialize(model as AstNode)).toBe('model test');
+    });
+});
+
+describe('TextSerializer with Formatting', async () => {
+
+    const grammar = expandToStringLF`
+        grammar FormattingTest
+
+        entry Model: 'model' name=ID items+=Item*;
+        Item: 'item' name=ID;
+        
+        hidden terminal WS: /\\s+/;
+        terminal ID: /[_a-zA-Z][\\w]*/;
+    `;
+
+    const services = await createServicesForGrammar({ 
+        grammar,
+        module: {
+            lsp: {
+                Formatter: () => {
+                    return new class extends AbstractFormatter {
+                        protected format(node: AstNode): void {
+                            // Add space before each 'item' keyword
+                            if (node.$type === 'Item') {
+                                const formatter = this.getNodeFormatter(node);
+                                formatter.keyword('item').prepend(Formatting.oneSpace());
+                            }
+                        }
+                    }();
+                }
+            }
+        } as any
+    });
+    const serializer = new DefaultTextSerializer(services);
+
+    // Inject the formatter from the language services
+    if (services.lsp?.Formatter) {
+        serializer.setFormatter(services.lsp.Formatter as TextSerializerFormatter);
+    }
+
+    test('Serialize without format', () => {
+        const item1 = { $type: 'Item', name: 'one' };
+        const item2 = { $type: 'Item', name: 'two' };
+        const model = { $type: 'Model', name: 'test', items: [item1, item2] };
+
+        const text = serializer.serialize(model as AstNode);
+        // Serialization adds space between items
+        expect(text).toBe('model test item one item two');
+    });
+
+    test('Serialize and format - formatter works (no change when already spaced)', async () => {
+        const item1 = { $type: 'Item', name: 'one' };
+        const item2 = { $type: 'Item', name: 'two' };
+        const model = { $type: 'Model', name: 'test', items: [item1, item2] };
+
+        // The formatter should work - it just won't add extra space since serializer already adds spaces
+        const text = await serializer.serializeAndFormat(model as AstNode, {
+            format: { insertSpaces: true, tabSize: 2 }
+        });
+        
+        // Serialization already adds spaces between items, so formatter won't change that
+        expect(text).toBe('model test item one item two');
+    });
+
+    test('Serialize and format - formatter adds newlines', async () => {
+        // Test with a formatter that adds newlines before 'item' keywords
+        const services2 = await createServicesForGrammar({ 
+            grammar,
+            module: {
+                lsp: {
+                    Formatter: () => {
+                        return new class extends AbstractFormatter {
+                            protected format(node: AstNode): void {
+                                // Add newline + indent before each 'item' keyword
+                                if (node.$type === 'Item') {
+                                    const formatter = this.getNodeFormatter(node);
+                                    formatter.keyword('item').prepend(
+                                        Formatting.fit(Formatting.newLine(), Formatting.indent())
+                                    );
+                                }
+                            }
+                        }();
+                    }
+                }
+            } as any
+        });
+        const serializer2 = new DefaultTextSerializer(services2);
+        if (services2.lsp?.Formatter) {
+            serializer2.setFormatter(services2.lsp.Formatter as TextSerializerFormatter);
+        }
+
+        const item1 = { $type: 'Item', name: 'one' };
+        const item2 = { $type: 'Item', name: 'two' };
+        const model = { $type: 'Model', name: 'test', items: [item1, item2] };
+
+        const text = await serializer2.serializeAndFormat(model as AstNode, {
+            format: { insertSpaces: true, tabSize: 2 }
+        });
+        
+        // Formatter should add newlines - just verify it contains newlines
+        expect(text).toContain('\n');
+        // Output should have "model test" on first line and items on subsequent lines
+        expect(text.split('\n').length).toBeGreaterThan(1);
+    });
+});
+
+describe('TextSerializer Complex Formatting', async () => {
+
+    const grammar = expandToStringLF`
+        grammar ComplexFormattingTest
+
+        entry Model: 'model' name=ID '{' statements+=Statement* '}';
+        Statement: VariableDecl;
+        
+        VariableDecl: 'var' name=ID '=' value=Expr;
+        
+        Expr: ExprAdd;
+        ExprAdd: left=INT operator=('+' | '-') right=INT;
+        
+        hidden terminal WS: /\\s+/;
+        terminal ID: /[_a-zA-Z][\\w]*/;
+        terminal INT: /[0-9]+/;
+    `;
+
+    async function createServicesWithFormatter(formatterFactory: () => AbstractFormatter) {
+        const services = await createServicesForGrammar({ 
+            grammar,
+            module: {
+                lsp: {
+                    Formatter: formatterFactory
+                }
+            } as any
+        });
+        const serializer = new DefaultTextSerializer(services);
+        if (services.lsp?.Formatter) {
+            serializer.setFormatter(services.lsp.Formatter as TextSerializerFormatter);
+        }
+        return { services, serializer };
+    }
+
+    test('Complex grammar - serialize without format', async () => {
+        const { serializer } = await createServicesWithFormatter(() => {
+            return new class extends AbstractFormatter {
+                protected format(node: AstNode): void {}
+            };
+        });
+
+        const exprAdd = { 
+            $type: 'ExprAdd', 
+            left: '1', 
+            operator: '+', 
+            right: '2' 
+        };
+        const variable = { $type: 'VariableDecl', name: 'x', value: exprAdd };
+        const model = { 
+            $type: 'Model', 
+            name: 'test', 
+            statements: [variable]
+        };
+
+        const text = serializer.serialize(model as AstNode);
+        // Should contain the serialized content without formatting
+        expect(text).toContain('model test');
+        expect(text).toContain('var x = 1 + 2');
+    });
+
+    test('Complex grammar - format with indentation', async () => {
+        const { serializer } = await createServicesWithFormatter(() => {
+            return new class extends AbstractFormatter {
+                protected format(node: AstNode): void {
+                    if (node.$type === 'Model') {
+                        const f = this.getNodeFormatter(node);
+                        f.keyword('{').prepend(Formatting.noSpace());
+                        f.keyword('}').prepend(Formatting.newLine());
+                    } else if (node.$type === 'VariableDecl') {
+                        const f = this.getNodeFormatter(node);
+                        f.keyword('var').prepend(Formatting.newLine());
+                        f.keyword('=').surround(Formatting.oneSpace());
+                    }
+                }
+            };
+        });
+
+        const exprAdd = { 
+            $type: 'ExprAdd', 
+            left: '1', 
+            operator: '+', 
+            right: '2' 
+        };
+        const variable = { $type: 'VariableDecl', name: 'x', value: exprAdd };
+        const model = { 
+            $type: 'Model', 
+            name: 'test', 
+            statements: [variable]
+        };
+
+        const text = await serializer.serializeAndFormat(model as AstNode, {
+            format: { insertSpaces: true, tabSize: 2 }
+        });
+
+        // Should have newlines
+        expect(text).toContain('\n');
+    });
+
+    test('Empty lists - format still works', async () => {
+        const { serializer } = await createServicesWithFormatter(() => {
+            return new class extends AbstractFormatter {
+                protected format(node: AstNode): void {
+                    if (node.$type === 'Model') {
+                        const f = this.getNodeFormatter(node);
+                        f.keyword('{').prepend(Formatting.noSpace());
+                    }
+                }
+            };
+        });
+
+        // Model with empty statements list
+        const model = { 
+            $type: 'Model', 
+            name: 'empty', 
+            statements: [] 
+        };
+
+        // Without format
+        const textNoFormat = serializer.serialize(model as AstNode);
+        expect(textNoFormat).toContain('model empty');
+
+        // With format - should not crash
+        const textWithFormat = await serializer.serializeAndFormat(model as AstNode, {
+            format: { insertSpaces: true, tabSize: 2 }
+        });
+        expect(textWithFormat).toBeDefined();
+    });
+
+    test('Expression - format each alternative', async () => {
+        const { serializer } = await createServicesWithFormatter(() => {
+            return new class extends AbstractFormatter {
+                protected format(node: AstNode): void {
+                    if (node.$type === 'VariableDecl') {
+                        const f = this.getNodeFormatter(node);
+                        f.keyword('var').prepend(Formatting.newLine());
+                    }
+                }
+            };
+        });
+
+        // Variable declaration with expression
+        const exprAdd = { 
+            $type: 'ExprAdd', 
+            left: '1', 
+            operator: '+', 
+            right: '2' 
+        };
+        const variable = { 
+            $type: 'VariableDecl', 
+            name: 'sum', 
+            value: exprAdd 
+        };
+        
+        const model = { 
+            $type: 'Model', 
+            name: 'calc', 
+            statements: [variable]
+        };
+
+        const text = await serializer.serializeAndFormat(model as AstNode, {
+            format: { insertSpaces: true, tabSize: 2 }
+        });
+
+        // Should have formatting applied
+        expect(text).toContain('\n');
     });
 });

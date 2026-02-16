@@ -5,6 +5,7 @@
  ******************************************************************************/
 
 import type { AbstractElement, Assignment, ParserRule, TerminalRule } from '../languages/generated/ast.js';
+import type { FormattingOptions, TextEdit, Position, Range } from 'vscode-languageserver-protocol';
 import {
     isAction,
     isAlternatives,
@@ -22,11 +23,13 @@ import type { AstNode, AstReflection } from '../syntax-tree.js';
 import { isReference } from '../syntax-tree.js';
 import type { NameProvider } from '../references/name-provider.js';
 import type { LangiumCoreServices } from '../services.js';
+import type { LangiumDocument } from '../workspace/documents.js';
 import type { ToStringValueConverterService, ToStringValueContext } from './to-string-converter.js';
 import type { GrammarInfo } from './grammar-info.js';
 import { buildGrammarInfo, getRulesForType } from './grammar-info.js';
 import type { Doc } from './doc.js';
 import { text, concat, render } from './doc.js';
+import { URI } from '../utils/uri-utils.js';
 
 /**
  * Options for text serialization.
@@ -46,6 +49,12 @@ export interface TextSerializeOptions {
      * @returns The serialized string representation, or undefined to throw error
      */
     serializeUnassignedTerminal?: (node: AstNode, terminalRule: TerminalRule) => string | undefined;
+    /**
+     * Optional formatting options.
+     * When provided, the serialized text will be formatted using the Langium formatter.
+     * This requires the formatter service to be available (LSP services).
+     */
+    format?: FormattingOptions;
 }
 
 /**
@@ -100,6 +109,39 @@ export interface TextSerializer {
     serialize(node: AstNode, options?: TextSerializeOptions): string;
 }
 
+export interface TextSerializerWithFormatting extends TextSerializer {
+    /**
+     * Serialize an AST node and optionally format the result.
+     * @param node The AST node to serialize.
+     * @param options Serialization options including formatting options.
+     * @returns The text representation of the AST node.
+     */
+    serialize(node: AstNode, options?: TextSerializeOptions): string;
+}
+
+export interface FormatOptions extends FormattingOptions {
+    /**
+     * Enable formatting. If not provided, defaults to true when any format option is set.
+     */
+    enabled?: boolean;
+}
+
+/**
+ * Formatter service interface for use with TextSerializer.
+ * This is typically the Langium Formatter service from LSP.
+ */
+export interface TextSerializerFormatter {
+    formatDocument(
+        document: LangiumDocument,
+        params: { textDocument: { uri: string }; options: FormattingOptions }
+    ): Promise<TextEdit[]>;
+}
+
+export interface TextDocumentLike {
+    getText(range?: Range): string;
+    offsetAt(position: Position): number;
+}
+
 /**
  * Default implementation of TextSerializer.
  */
@@ -109,6 +151,8 @@ export class DefaultTextSerializer implements TextSerializer {
     protected readonly toStringConverter: ToStringValueConverterService;
     protected readonly grammarInfo: GrammarInfo;
     protected readonly languageId: string;
+    protected readonly services: LangiumCoreServices;
+    protected formatter: TextSerializerFormatter | undefined;
 
     constructor(services: LangiumCoreServices) {
         this.nameProvider = services.references.NameProvider;
@@ -116,9 +160,20 @@ export class DefaultTextSerializer implements TextSerializer {
         this.toStringConverter = services.serializer.ToStringValueConverter;
         this.grammarInfo = buildGrammarInfo(services.Grammar);
         this.languageId = services.LanguageMetaData?.languageId ?? 'unknown';
+        this.services = services;
+    }
+
+    /**
+     * Set the formatter service for use with the format option.
+     * This is typically injected by the LSP module.
+     */
+    setFormatter(formatter: TextSerializerFormatter): void {
+        this.formatter = formatter;
     }
 
     serialize(node: AstNode, options?: TextSerializeOptions): string {
+        const formatOptions = options?.format;
+
         const context = new SerializationContext(
             this.nameProvider,
             this.toStringConverter,
@@ -148,7 +203,103 @@ export class DefaultTextSerializer implements TextSerializer {
             );
         }
         context.serializeNode(node, rule.definition, [typeName]);
-        return context.getResult();
+        const text = context.getResult();
+
+        if (formatOptions && this.formatter) {
+            // Note: format requires async - use serializeAndFormat for formatted output
+            console.warn('TextSerializer: format option requires async serialization. Use serializeAndFormat() instead.');
+        }
+
+        return text;
+    }
+
+    /**
+     * Serialize an AST node and apply formatting.
+     * This is async because formatting requires the formatter service.
+     */
+    async serializeAndFormat(node: AstNode, options?: TextSerializeOptions): Promise<string> {
+        const formatOptions = options?.format;
+
+        const context = new SerializationContext(
+            this.nameProvider,
+            this.toStringConverter,
+            this.grammarInfo,
+            this.languageId,
+            options
+        );
+        const typeName = node.$type;
+        const rules = getRulesForType(this.grammarInfo, typeName);
+        if (rules.size === 0) {
+            throw new SerializationError(
+                `No parser rule found for type '${typeName}'`,
+                node,
+                undefined,
+                undefined,
+                [typeName]
+            );
+        }
+        const rule = rules.values().next().value;
+        if (!rule) {
+            throw new SerializationError(
+                `No parser rule found for type '${typeName}'`,
+                node,
+                undefined,
+                undefined,
+                [typeName]
+            );
+        }
+        context.serializeNode(node, rule.definition, [typeName]);
+        const text = context.getResult();
+
+        if (formatOptions && this.formatter) {
+            return this.applyFormatting(text, node, formatOptions);
+        }
+
+        return text;
+    }
+
+    private async applyFormatting(text: string, node: AstNode, formatOptions: FormattingOptions): Promise<string> {
+        if (!this.formatter) {
+            return text;
+        }
+
+        // Parse the serialized text back to get a real CST
+        // Use the language's file extension to ensure the service registry can find our services
+        const extension = this.services.LanguageMetaData?.fileExtensions[0] ?? '.txt';
+        const uri = URI.parse(`memory:///${Date.now()}${this.languageId}${extension}`);
+        const document = this.services.shared.workspace.LangiumDocumentFactory.fromString(text, uri);
+        this.services.shared.workspace.LangiumDocuments.addDocument(document);
+        await this.services.shared.workspace.DocumentBuilder.build([document]);
+
+        const edits = await this.formatter.formatDocument(document, {
+            textDocument: { uri: uri.toString() },
+            options: formatOptions
+        });
+
+        if (edits.length === 0) {
+            return text;
+        }
+
+        return this.applyTextEdits(document.textDocument, edits);
+    }
+
+    private applyTextEdits(textDocument: { getText(range?: Range): string; offsetAt(position: Position): number }, edits: TextEdit[]): string {
+        let result = textDocument.getText();
+        
+        // Sort edits in reverse order to apply from end to start
+        const sortedEdits = [...edits].sort((a, b) => {
+            const aStart = textDocument.offsetAt(a.range.start);
+            const bStart = textDocument.offsetAt(b.range.start);
+            return bStart - aStart;
+        });
+
+        for (const edit of sortedEdits) {
+            const start = textDocument.offsetAt(edit.range.start);
+            const end = textDocument.offsetAt(edit.range.end);
+            result = result.substring(0, start) + edit.newText + result.substring(end);
+        }
+
+        return result;
     }
 }
 

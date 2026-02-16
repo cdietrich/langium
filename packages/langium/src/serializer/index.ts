@@ -10,3 +10,5 @@ export * from './doc.js';
 export * from './to-string-converter.js';
 export * from './grammar-info.js';
 export * from './text-serializer.js';
+export * from './virtual-cst.js';
+export * from './virtual-document.js';
