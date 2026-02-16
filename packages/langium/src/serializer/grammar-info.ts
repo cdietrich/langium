@@ -200,25 +200,15 @@ export function findSeparator(assignment: Assignment): string | undefined {
         return undefined;
     }
 
-    // Look for a keyword between this assignment and the next
     for (let i = index + 1; i < elements.length; i++) {
         const next = elements[i];
         if (isKeyword(next)) {
-            // Check if this keyword is a separator (like ',')
-            // Skip if it's part of the same assignment's terminal
-            if (i === index + 1 && isAssignment(next)) {
-                continue;
-            }
             return next.value;
         }
-        // Skip non-assignment elements that are not keywords
-        if (!isAssignment(next) && !isKeyword(next)) {
+        if (!isAssignment(next)) {
             continue;
         }
-        // If we hit another assignment without finding a separator, return undefined
-        if (isAssignment(next)) {
-            return undefined;
-        }
+        return undefined;
     }
 
     return undefined;

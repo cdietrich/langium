@@ -1202,3 +1202,55 @@ describe('TextSerializer2 Optional Keyword Block', async () => {
         expect(serialized).toContain('options');
     });
 });
+
+describe('TextSerializer Fragment Rules Extended', async () => {
+
+    const grammar = expandToStringLF`
+        grammar FragmentRuleTestExtended
+
+        entry Model: Visibility 'model' name=ID;
+        fragment Visibility: visibility=('public'|'private'|'protected')?;
+
+        hidden terminal WS: /\\s+/;
+        terminal ID: /[_a-zA-Z][\\w]*/;
+    `;
+
+    const services = await createServicesForGrammar({ grammar });
+    const serializer = new DefaultTextSerializer(services);
+
+    test('Serialize model with public visibility', () => {
+        const model = { $type: 'Model', visibility: 'public', name: 'MyModel' };
+        expect(serializer.serialize(model as AstNode)).toBe('public model MyModel');
+    });
+
+    test('Serialize model with private visibility', () => {
+        const model = { $type: 'Model', visibility: 'private', name: 'MyModel' };
+        expect(serializer.serialize(model as AstNode)).toBe('private model MyModel');
+    });
+
+    test('Serialize model without visibility', () => {
+        const model = { $type: 'Model', name: 'MyModel' };
+        expect(serializer.serialize(model as AstNode)).toBe('model MyModel');
+    });
+});
+
+describe('TextSerializer Hidden Terminal Rules', async () => {
+
+    const grammar = expandToStringLF`
+        grammar HiddenTerminalTest
+
+        entry Model: 'model' name=ID ('comment' comment=COMMENT)?;
+        terminal COMMENT: /\\/\\/.*/;
+
+        hidden terminal WS: /\\s+/;
+        terminal ID: /[_a-zA-Z][\\w]*/;
+    `;
+
+    const services = await createServicesForGrammar({ grammar });
+    const serializer = new DefaultTextSerializer(services);
+
+    test('Serialize model without comment', () => {
+        const model = { $type: 'Model', name: 'test' };
+        expect(serializer.serialize(model as AstNode)).toBe('model test');
+    });
+});

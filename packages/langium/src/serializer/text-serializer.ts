@@ -38,6 +38,14 @@ export interface TextSerializeOptions {
      * If false, computes the name using NameProvider.
      */
     useRefText?: boolean;
+    /**
+     * Optional callback for serializing unassigned terminal rule calls.
+     * If not provided, the serializer will throw a SerializationError.
+     * @param node The AST node being serialized
+     * @param terminalRule The terminal rule that was called
+     * @returns The serialized string representation, or undefined to throw error
+     */
+    serializeUnassignedTerminal?: (node: AstNode, terminalRule: TerminalRule) => string | undefined;
 }
 
 /**
@@ -172,12 +180,14 @@ class SerializationContext {
     }
 
     serializeValue(value: unknown, ruleName: string, node: AstNode, property: string): string {
+        const terminalRule = this.grammarInfo.terminalRules.get(ruleName);
+        const datatypeRule = this.grammarInfo.datatypeRules.get(ruleName);
+        const rule = terminalRule ?? datatypeRule;
         const context: ToStringValueContext = {
             node,
             property,
             value,
-            rule: this.grammarInfo.terminalRules.get(ruleName) 
-                ?? this.grammarInfo.datatypeRules.get(ruleName)!,
+            rule: rule!,
             languageId: this.languageId
         };
         const converterWithContext = this.toStringConverter.getConverterWithContext(ruleName);
@@ -286,25 +296,15 @@ class SerializationContext {
             return undefined;
         }
 
-        // Look for the next element after this assignment
-        // If it's a keyword, that might be the separator
         for (let i = index + 1; i < elements.length; i++) {
             const next = elements[i];
             if (isKeyword(next)) {
-                // Check if this keyword appears multiple times (potential separator pattern)
-                // For simple case: ',' between elements
-                if (next.value === ',') {
-                    return ',';
-                }
-                // Could be other separators
                 return next.value;
             }
             if (isAssignment(next)) {
-                // Found next assignment directly, no separator between these two
                 return undefined;
             }
             if (isGroup(next)) {
-                // Check inside the group for a keyword separator
                 const sep = this.findSeparatorInGroup(next);
                 if (sep) {
                     return sep;
@@ -709,6 +709,11 @@ class SerializationContext {
         }
         const ref = ruleCall.rule.ref;
         if (isTerminalRule(ref)) {
+            const result = this.options.serializeUnassignedTerminal?.(node, ref);
+            if (result !== undefined) {
+                this.emit(text(result));
+                return;
+            }
             throw new SerializationError(
                 `Unassigned terminal rule call '${ref.name}' requires a serializeUnassignedTerminal callback`,
                 node,
