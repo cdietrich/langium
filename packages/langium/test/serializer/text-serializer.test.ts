@@ -5,13 +5,12 @@
  ******************************************************************************/
 
 import type { AstNode, CstNode } from '../../src/syntax-tree.js';
-import type { Grammar, AbstractRule } from '../../src/languages/generated/ast.js';
-import { isKeyword as isGrammarKeyword } from '../../src/languages/generated/ast.js';
+import type { AbstractRule } from '../../src/languages/generated/ast.js';
 import type { SerializeValueContext } from '../../src/serializer/text-serializer.js';
 import type { ValueType } from '../../src/parser/value-converter.js';
 import type { LangiumCoreServices } from '../../src/services.js';
-import { streamAst } from '../../src/utils/ast-utils.js';
 import { DefaultValueConverter } from '../../src/parser/value-converter.js';
+import { DefaultToStringValueConverterService } from '../../src/serializer/to-string-converter.js';
 import { createServicesForGrammar } from '../../src/grammar/internal-grammar-util.js';
 import { expandToStringLF } from '../../src/generate/template-string.js';
 import { parseHelper, clearDocuments } from '../../src/test/langium-test.js';
@@ -622,11 +621,17 @@ describe('TextSerializer serializeValue Hook', async () => {
         }
     }
 
-    function getAllKeywords(grammarNode: Grammar): Set<string> {
-        return streamAst(grammarNode)
-            .filter(n => isGrammarKeyword(n))
-            .map(n => (n as { value: string }).value)
-            .toSet();
+    class EscapedIdToStringConverterService extends DefaultToStringValueConverterService {
+        constructor(keywords: Set<string>) {
+            super();
+            this.register('EscapedId', (value) => {
+                const strValue = String(value);
+                if (keywords.has(strValue)) {
+                    return `\`${strValue}\``;
+                }
+                return strValue;
+            });
+        }
     }
 
     let services: LangiumCoreServices;
@@ -635,40 +640,24 @@ describe('TextSerializer serializeValue Hook', async () => {
     let keywords: Set<string>;
 
     beforeAll(async () => {
+        keywords = new Set(['model']);
         services = await createServicesForGrammar({
             grammar,
             module: {
                 parser: {
                     ValueConverter: () => new EscapedIdValueConverter()
+                },
+                serializer: {
+                    ToStringValueConverter: () => new EscapedIdToStringConverterService(keywords)
                 }
             }
         });
         serializer = new DefaultTextSerializer(services);
         parse = parseHelper(services);
-        keywords = getAllKeywords(services.Grammar);
     });
 
     beforeEach(() => {
         clearDocuments(services);
-    });
-
-    function serializeWithEscaping(node: AstNode): string {
-        return serializer.serialize(node, {
-            serializeValue: (ctx: SerializeValueContext) => {
-                if (ctx.ruleName === 'ID' || ctx.ruleName === 'RawId' || ctx.ruleName === 'EscapedId') {
-                    const strValue = String(ctx.value);
-                    if (keywords.has(strValue)) {
-                        return `\`${strValue}\``;
-                    }
-                    return strValue;
-                }
-                return String(ctx.value);
-            }
-        });
-    }
-
-    test('Keywords are correctly extracted from grammar', () => {
-        expect(keywords.has('model')).toBe(true);
     });
 
     test('Parse escaped keyword - backticks are stripped', async () => {
@@ -683,19 +672,19 @@ describe('TextSerializer serializeValue Hook', async () => {
         expect((result.parseResult.value as unknown as { name: string }).name).toBe('sample');
     });
 
-    test('Serialize with serializeValue hook - keyword gets escaped', async () => {
+    test('Serialize with ToStringValueConverter - keyword gets escaped', async () => {
         const result = await parse('model `model`');
         expect(result.parseResult.parserErrors).toHaveLength(0);
 
-        const text = serializeWithEscaping(result.parseResult.value);
+        const text = serializer.serialize(result.parseResult.value);
         expect(text).toBe('model `model`');
     });
 
-    test('Serialize with serializeValue hook - non-keyword stays unescaped', async () => {
+    test('Serialize with ToStringValueConverter - non-keyword stays unescaped', async () => {
         const result = await parse('model sample');
         expect(result.parseResult.parserErrors).toHaveLength(0);
 
-        const text = serializeWithEscaping(result.parseResult.value);
+        const text = serializer.serialize(result.parseResult.value);
         expect(text).toBe('model sample');
     });
 
