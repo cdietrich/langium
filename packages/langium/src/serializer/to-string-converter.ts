@@ -84,8 +84,8 @@ export class DefaultToStringValueConverterService implements ToStringValueConver
         this.primitiveConverters.set('string', (value) => {
             // For string type, check if it needs quoting
             const str = String(value);
-            // If the string contains special characters or matches ID pattern, quote it
-            if (/^[_a-zA-Z][\w]*$/.test(str) && !str.includes(' ')) {
+            // If the string matches ID pattern (including dots for qualified names), don't quote
+            if (/^[_a-zA-Z][\w.]*$/.test(str) && !str.includes(' ')) {
                 return str;
             }
             // Check if it's already quoted

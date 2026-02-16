@@ -720,3 +720,476 @@ describe('TextSerializer serializeValue Hook', async () => {
         });
     });
 });
+
+describe('TextSerializer2 Domain Model Grammar', async () => {
+
+    const grammar = expandToStringLF`
+        grammar DomainModelTest
+
+        entry Domainmodel: (elements+=AbstractElement)*;
+
+        AbstractElement: DataType | Entity | PackageDeclaration;
+
+        DataType: 'datatype' name=ID;
+
+        Entity: 'entity' name=ID ('extends' superType=[Entity:QualifiedName])? '{' (features+=Feature)* '}';
+
+        Feature: (many?='many')? name=ID ':' type=[Type:QualifiedName];
+
+        PackageDeclaration: 'package' name=ID '{' (elements+=AbstractElement)* '}';
+
+        QualifiedName returns string: ID ('.' ID)*;
+
+        hidden terminal WS: /\\s+/;
+        terminal ID: /[_a-zA-Z][\\w]*/;
+    `;
+
+    const services = await createServicesForGrammar({ grammar });
+    const serializer = new DefaultTextSerializer(services);
+    const jsonSerializer = services.serializer.JsonSerializer;
+    const parse = parseHelper<AstNode>(services);
+
+    beforeEach(() => {
+        clearDocuments(services);
+    });
+
+    async function expectRoundtrip(input: string) {
+        const doc1 = await parse(input);
+        await services.shared.workspace.DocumentBuilder.build([doc1]);
+        expect(doc1.parseResult.lexerErrors).toHaveLength(0);
+        expect(doc1.parseResult.parserErrors).toHaveLength(0);
+        const ast1 = doc1.parseResult.value;
+
+        const serialized = serializer.serialize(ast1);
+
+        const doc2 = await parse(serialized);
+        await services.shared.workspace.DocumentBuilder.build([doc2]);
+        expect(doc2.parseResult.lexerErrors).toHaveLength(0);
+        expect(doc2.parseResult.parserErrors).toHaveLength(0);
+        const ast2 = doc2.parseResult.value;
+
+        const json1 = jsonSerializer.serialize(ast1);
+        const json2 = jsonSerializer.serialize(ast2);
+        expect(json1).toBe(json2);
+    }
+
+    test('Serialize simple entity', () => {
+        const stringType = { $type: 'DataType', name: 'String' };
+        const feature = { $type: 'Feature', name: 'name', type: { $refText: 'String', ref: stringType } };
+        const entity = { $type: 'Entity', name: 'Person', features: [feature] };
+        const model = { $type: 'Domainmodel', elements: [stringType, entity] };
+
+        const text = serializer.serialize(model as AstNode);
+
+        expect(text).toBe('datatype String entity Person { name : String }');
+    });
+
+    test('Serialize entity with extends', () => {
+        const parent = { $type: 'Entity', name: 'Parent', features: [] };
+        const child = {
+            $type: 'Entity',
+            name: 'Child',
+            superType: { $refText: 'Parent', ref: parent },
+            features: []
+        };
+        const model = { $type: 'Domainmodel', elements: [parent, child] };
+
+        const text = serializer.serialize(model as AstNode);
+
+        expect(text).toBe('entity Parent { } entity Child extends Parent { }');
+    });
+
+    test('Serialize datatype', () => {
+        const datatype = { $type: 'DataType', name: 'String' };
+        const model = { $type: 'Domainmodel', elements: [datatype] };
+
+        const text = serializer.serialize(model as AstNode);
+
+        expect(text).toBe('datatype String');
+    });
+
+    test('Serialize mixed children (DataType + Entity)', () => {
+        const stringType = { $type: 'DataType', name: 'String' };
+        const intType = { $type: 'DataType', name: 'Int' };
+        const feature = { $type: 'Feature', name: 'age', type: { $refText: 'Int', ref: intType } };
+        const entity = { $type: 'Entity', name: 'Person', features: [feature] };
+        const model = { $type: 'Domainmodel', elements: [stringType, intType, entity] };
+
+        const text = serializer.serialize(model as AstNode);
+
+        expect(text).toBe('datatype String datatype Int entity Person { age : Int }');
+    });
+
+    test('Serialize feature with many flag', () => {
+        const itemType = { $type: 'DataType', name: 'Item' };
+        const feature = { $type: 'Feature', many: true, name: 'items', type: { $refText: 'Item', ref: itemType } };
+        const entity = { $type: 'Entity', name: 'Container', features: [feature] };
+        const model = { $type: 'Domainmodel', elements: [itemType, entity] };
+
+        const text = serializer.serialize(model as AstNode);
+
+        expect(text).toBe('datatype Item entity Container { many items : Item }');
+    });
+
+    test('Serialize simple package', () => {
+        const entity = { $type: 'Entity', name: 'MyEntity', features: [] };
+        const pkg = { $type: 'PackageDeclaration', name: 'mypackage', elements: [entity] };
+        const model = { $type: 'Domainmodel', elements: [pkg] };
+
+        const text = serializer.serialize(model as AstNode);
+
+        expect(text).toBe('package mypackage { entity MyEntity { } }');
+    });
+
+    test('Serialize nested packages', () => {
+        const entity = { $type: 'Entity', name: 'E', features: [] };
+        const innerPkg = { $type: 'PackageDeclaration', name: 'bar', elements: [entity] };
+        const outerPkg = { $type: 'PackageDeclaration', name: 'foo', elements: [innerPkg] };
+        const model = { $type: 'Domainmodel', elements: [outerPkg] };
+
+        const text = serializer.serialize(model as AstNode);
+
+        expect(text).toBe('package foo { package bar { entity E { } } }');
+    });
+
+    test('Roundtrip: Simple entity', async () => {
+        const input = 'datatype String entity Person { name : String }';
+        const doc = await parse(input);
+        await services.shared.workspace.DocumentBuilder.build([doc]);
+        expect(doc.parseResult.parserErrors).toHaveLength(0);
+
+        const serialized = serializer.serialize(doc.parseResult.value);
+        expect(serialized).toContain('datatype String');
+        expect(serialized).toContain('entity Person');
+    });
+
+    test('Roundtrip: Entity with extends', async () => {
+        await expectRoundtrip('entity Parent { } entity Child extends Parent { }');
+    });
+
+    test('Roundtrip: Datatype', async () => {
+        await expectRoundtrip('datatype String');
+    });
+
+    test('Roundtrip: Nested packages', async () => {
+        await expectRoundtrip('package foo { package bar { entity E { } } }');
+    });
+});
+
+describe('TextSerializer2 QualifiedName DataType Rule', async () => {
+
+    const grammar = expandToStringLF`
+        grammar QualifiedNameTest
+
+        entry Model: 'model' name=QualifiedName;
+
+        QualifiedName returns string: ID ('.' ID)*;
+
+        hidden terminal WS: /\\s+/;
+        terminal ID: /[_a-zA-Z][\\w]*/;
+    `;
+
+    const services = await createServicesForGrammar({ grammar });
+    const serializer = new DefaultTextSerializer(services);
+    const parse = parseHelper<AstNode>(services);
+
+    beforeEach(() => {
+        clearDocuments(services);
+    });
+
+    test('Serialize simple qualified name', () => {
+        const model = { $type: 'Model', name: 'simple' };
+        expect(serializer.serialize(model as AstNode)).toBe('model simple');
+    });
+
+    test('Serialize two-part qualified name', () => {
+        const model = { $type: 'Model', name: 'foo.bar' };
+        expect(serializer.serialize(model as AstNode)).toBe('model foo.bar');
+    });
+
+    test('Serialize multi-part qualified name', () => {
+        const model = { $type: 'Model', name: 'org.example.domain.MyClass' };
+        expect(serializer.serialize(model as AstNode)).toBe('model org.example.domain.MyClass');
+    });
+
+    test('Roundtrip: Simple qualified name', async () => {
+        const input = 'model simple';
+        const doc = await parse(input);
+        expect(doc.parseResult.parserErrors).toHaveLength(0);
+
+        const serialized = serializer.serialize(doc.parseResult.value);
+        expect(serialized).toBe(input);
+    });
+
+    test('Roundtrip: Multi-part qualified name', async () => {
+        const input = 'model org.example.MyClass';
+        const doc = await parse(input);
+        expect(doc.parseResult.parserErrors).toHaveLength(0);
+
+        const serialized = serializer.serialize(doc.parseResult.value);
+        expect(serialized).toBe(input);
+    });
+});
+
+describe('TextSerializer2 Statemachine Grammar', async () => {
+
+    const grammar = expandToStringLF`
+        grammar StatemachineTest
+
+        entry Statemachine:
+            'statemachine' name=ID
+            ('events' events+=Event+)?
+            ('commands' commands+=Command+)?
+            'initialState' init=[State]
+            states+=State*;
+
+        Event: name=ID;
+
+        Command: name=ID;
+
+        State:
+            'state' name=ID
+            ('actions' '{' actions+=[Command]+ '}')?
+            transitions+=Transition*
+            'end';
+
+        Transition: event=[Event] '=>' state=[State];
+
+        hidden terminal WS: /\\s+/;
+        terminal ID: /[_a-zA-Z][\\w]*/;
+    `;
+
+    const services = await createServicesForGrammar({ grammar });
+    const serializer = new DefaultTextSerializer(services);
+    const jsonSerializer = services.serializer.JsonSerializer;
+    const parse = parseHelper<AstNode>(services);
+
+    beforeEach(() => {
+        clearDocuments(services);
+    });
+
+    async function expectRoundtrip(input: string) {
+        const doc1 = await parse(input);
+        await services.shared.workspace.DocumentBuilder.build([doc1]);
+        expect(doc1.parseResult.lexerErrors).toHaveLength(0);
+        expect(doc1.parseResult.parserErrors).toHaveLength(0);
+        const ast1 = doc1.parseResult.value;
+
+        const serialized = serializer.serialize(ast1);
+
+        const doc2 = await parse(serialized);
+        await services.shared.workspace.DocumentBuilder.build([doc2]);
+        expect(doc2.parseResult.lexerErrors).toHaveLength(0);
+        expect(doc2.parseResult.parserErrors).toHaveLength(0);
+        const ast2 = doc2.parseResult.value;
+
+        const json1 = jsonSerializer.serialize(ast1);
+        const json2 = jsonSerializer.serialize(ast2);
+        expect(json1).toBe(json2);
+    }
+
+    test('Serialize minimal statemachine (no events/commands)', () => {
+        const state = { $type: 'State', name: 'idle', actions: [], transitions: [] };
+        const sm = {
+            $type: 'Statemachine',
+            name: 'minimal',
+            init: { $refText: 'idle', ref: state },
+            states: [state]
+        };
+
+        const text = serializer.serialize(sm as AstNode);
+
+        expect(text).toBe('statemachine minimal initialState idle state idle end');
+    });
+
+    test('Serialize statemachine with events block', () => {
+        const event1 = { $type: 'Event', name: 'e1' };
+        const event2 = { $type: 'Event', name: 'e2' };
+        const state = { $type: 'State', name: 'idle', actions: [], transitions: [] };
+        const sm = {
+            $type: 'Statemachine',
+            name: 'withEvents',
+            events: [event1, event2],
+            init: { $refText: 'idle', ref: state },
+            states: [state]
+        };
+
+        const text = serializer.serialize(sm as AstNode);
+
+        expect(text).toBe('statemachine withEvents events e1 e2 initialState idle state idle end');
+    });
+
+    test('Serialize state with actions', () => {
+        const cmd1 = { $type: 'Command', name: 'lockDoor' };
+        const state = {
+            $type: 'State',
+            name: 'locked',
+            actions: [{ $refText: 'lockDoor', ref: cmd1 }],
+            transitions: []
+        };
+        const sm = {
+            $type: 'Statemachine',
+            name: 'doorLock',
+            commands: [cmd1],
+            init: { $refText: 'locked', ref: state },
+            states: [state]
+        };
+
+        const text = serializer.serialize(sm as AstNode);
+
+        expect(text).toBe('statemachine doorLock commands lockDoor initialState locked state locked actions { lockDoor } end');
+    });
+
+    test('Roundtrip: Minimal statemachine', async () => {
+        await expectRoundtrip('statemachine minimal initialState idle state idle end');
+    });
+
+    test('Roundtrip: Statemachine with events', async () => {
+        await expectRoundtrip('statemachine withEvents events e1 e2 e3 initialState idle state idle end');
+    });
+
+    test('Roundtrip: State with actions', async () => {
+        const input = 'statemachine withActions commands beep flash initialState active state active actions { beep flash } end';
+        const doc = await parse(input);
+        expect(doc.parseResult.parserErrors).toHaveLength(0);
+
+        const serialized = serializer.serialize(doc.parseResult.value);
+        expect(serialized).toContain('statemachine');
+        expect(serialized).toContain('actions');
+    });
+
+    test('Roundtrip: Full statemachine', async () => {
+        const input = 'statemachine doorLock events lock unlock commands lockDoor unlockDoor soundAlarm initialState unlocked state unlocked lock => locked end state locked actions { lockDoor soundAlarm } unlock => unlocked end';
+        const doc = await parse(input);
+        expect(doc.parseResult.parserErrors).toHaveLength(0);
+
+        const serialized = serializer.serialize(doc.parseResult.value);
+        expect(serialized).toContain('statemachine');
+        expect(serialized).toContain('lock => locked');
+    });
+});
+
+describe('TextSerializer2 Group+ Cardinality', async () => {
+
+    const grammar = expandToStringLF`
+        grammar GroupPlusTest
+
+        entry Model: 'items' items+=Item+;
+
+        Item: 'item' name=ID;
+
+        hidden terminal WS: /\\s+/;
+        terminal ID: /[_a-zA-Z][\\w]*/;
+    `;
+
+    const services = await createServicesForGrammar({ grammar });
+    const serializer = new DefaultTextSerializer(services);
+    const parse = parseHelper<AstNode>(services);
+
+    beforeEach(() => {
+        clearDocuments(services);
+    });
+
+    test('Serialize single item (minimum for + cardinality)', () => {
+        const item = { $type: 'Item', name: 'only' };
+        const model = { $type: 'Model', items: [item] };
+
+        const text = serializer.serialize(model as AstNode);
+
+        expect(text).toBe('items item only');
+    });
+
+    test('Serialize multiple items', () => {
+        const item1 = { $type: 'Item', name: 'first' };
+        const item2 = { $type: 'Item', name: 'second' };
+        const item3 = { $type: 'Item', name: 'third' };
+        const model = { $type: 'Model', items: [item1, item2, item3] };
+
+        const text = serializer.serialize(model as AstNode);
+
+        expect(text).toBe('items item first item second item third');
+    });
+
+    test('Roundtrip: Single item', async () => {
+        const input = 'items item single';
+        const doc = await parse(input);
+        expect(doc.parseResult.parserErrors).toHaveLength(0);
+
+        const serialized = serializer.serialize(doc.parseResult.value);
+        expect(serialized).toBe(input);
+    });
+
+    test('Roundtrip: Multiple items', async () => {
+        const input = 'items item a item b item c';
+        const doc = await parse(input);
+        expect(doc.parseResult.parserErrors).toHaveLength(0);
+
+        const serialized = serializer.serialize(doc.parseResult.value);
+        expect(serialized).toBe(input);
+    });
+});
+
+describe('TextSerializer2 Optional Keyword Block', async () => {
+
+    const grammar = expandToStringLF`
+        grammar OptionalBlockTest
+
+        entry Model:
+            'model' name=ID
+            ('options' '{' options+=Option+ '}')?
+            ;
+
+        Option: name=ID '=' value=ID;
+
+        hidden terminal WS: /\\s+/;
+        terminal ID: /[_a-zA-Z][\\w]*/;
+    `;
+
+    const services = await createServicesForGrammar({ grammar });
+    const serializer = new DefaultTextSerializer(services);
+    const parse = parseHelper<AstNode>(services);
+
+    beforeEach(() => {
+        clearDocuments(services);
+    });
+
+    test('Serialize without optional block', () => {
+        const model = { $type: 'Model', name: 'simple' };
+
+        const text = serializer.serialize(model as AstNode);
+
+        expect(text).toBe('model simple');
+    });
+
+    test('Serialize with optional block', () => {
+        const opt1 = { $type: 'Option', name: 'debug', value: 'true' };
+        const opt2 = { $type: 'Option', name: 'mode', value: 'fast' };
+        const model = { $type: 'Model', name: 'configured', options: [opt1, opt2] };
+
+        const text = serializer.serialize(model as AstNode);
+
+        expect(text).toContain('model configured');
+        expect(text).toContain('options');
+        expect(text).toContain('debug');
+        expect(text).toContain('mode');
+    });
+
+    test('Roundtrip: Without optional block', async () => {
+        const input = 'model simple';
+        const doc = await parse(input);
+        expect(doc.parseResult.parserErrors).toHaveLength(0);
+
+        const serialized = serializer.serialize(doc.parseResult.value);
+        expect(serialized).toBe(input);
+    });
+
+    test('Roundtrip: With optional block', async () => {
+        const input = 'model configured options { debug = true mode = fast }';
+        const doc = await parse(input);
+        expect(doc.parseResult.parserErrors).toHaveLength(0);
+
+        const serialized = serializer.serialize(doc.parseResult.value);
+        expect(serialized).toContain('model configured');
+        expect(serialized).toContain('options');
+    });
+});
