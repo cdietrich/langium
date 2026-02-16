@@ -22,7 +22,7 @@ import type { AstNode, AstReflection } from '../syntax-tree.js';
 import { isReference } from '../syntax-tree.js';
 import type { NameProvider } from '../references/name-provider.js';
 import type { LangiumCoreServices } from '../services.js';
-import type { ToStringValueConverterService } from './to-string-converter.js';
+import type { ToStringValueConverterService, ToStringValueContext } from './to-string-converter.js';
 import type { GrammarInfo } from './grammar-info.js';
 import { buildGrammarInfo, getRulesForType } from './grammar-info.js';
 import type { Doc } from './doc.js';
@@ -38,27 +38,6 @@ export interface TextSerializeOptions {
      * If false, computes the name using NameProvider.
      */
     useRefText?: boolean;
-    /**
-     * Hook to customize serialization of values.
-     * Allows users to provide custom serialization for specific properties.
-     */
-    serializeValue?: (ctx: SerializeValueContext) => string;
-}
-
-/**
- * Context passed to the serializeValue hook.
- */
-export interface SerializeValueContext {
-    /** The AST node being serialized */
-    node: AstNode;
-    /** The property name being serialized */
-    property: string;
-    /** The value to serialize */
-    value: unknown;
-    /** The name of the rule used for this value */
-    ruleName: string;
-    /** The language ID */
-    languageId: string;
 }
 
 /**
@@ -193,17 +172,16 @@ class SerializationContext {
     }
 
     serializeValue(value: unknown, ruleName: string, node: AstNode, property: string): string {
-        if (this.options.serializeValue) {
-            const context: SerializeValueContext = {
-                node,
-                property,
-                value,
-                ruleName,
-                languageId: this.languageId
-            };
-            return this.options.serializeValue(context);
-        }
-        return String(value);
+        const context: ToStringValueContext = {
+            node,
+            property,
+            value,
+            rule: this.grammarInfo.terminalRules.get(ruleName) 
+                ?? this.grammarInfo.datatypeRules.get(ruleName)!,
+            languageId: this.languageId
+        };
+        const converterWithContext = this.toStringConverter.getConverterWithContext(ruleName);
+        return converterWithContext(context);
     }
 
     serializeNode(node: AstNode, element: AbstractElement | undefined, path: string[]): void {

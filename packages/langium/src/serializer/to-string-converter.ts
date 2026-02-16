@@ -6,12 +6,18 @@
 
 import type { AbstractRule, PrimitiveType } from '../languages/generated/ast.js';
 import { isParserRule, isTerminalRule } from '../languages/generated/ast.js';
+import type { AstNode } from '../syntax-tree.js';
 
-/**
- * Converts a typed value back to its string representation.
- * Inverse of ValueConverter - used during serialization.
- */
+export interface ToStringValueContext {
+    node: AstNode;
+    property: string;
+    value: unknown;
+    rule: AbstractRule;
+    languageId: string;
+}
+
 export type ToStringValueConverter = (value: unknown, rule: AbstractRule) => string;
+export type ToStringValueConverterWithContext = (ctx: ToStringValueContext) => string;
 
 /**
  * Service that provides toString converters for terminal and datatype rules.
@@ -24,16 +30,32 @@ export interface ToStringValueConverterService {
      */
     getConverter(ruleName: string): ToStringValueConverter;
     /**
+     * Get the toString converter for a terminal or datatype rule with full context.
+     * @param ruleName The name of the terminal or datatype rule.
+     */
+    getConverterWithContext(ruleName: string): ToStringValueConverterWithContext;
+    /**
      * Get converter for a rule - handles both terminal rules and datatype rules.
      * @param rule The abstract rule (terminal or parser rule)
      */
     getConverterForRule(rule: AbstractRule): ToStringValueConverter;
+    /**
+     * Get converter for a rule with full context.
+     * @param rule The abstract rule (terminal or parser rule)
+     */
+    getConverterForRuleWithContext(rule: AbstractRule): ToStringValueConverterWithContext;
     /**
      * Register a custom converter for a terminal or datatype rule.
      * @param ruleName The name of the terminal or datatype rule.
      * @param converter The converter function.
      */
     register(ruleName: string, converter: ToStringValueConverter): void;
+    /**
+     * Register a custom converter with full context for a terminal or datatype rule.
+     * @param ruleName The name of the terminal or datatype rule.
+     * @param converter The converter function with context.
+     */
+    registerWithContext(ruleName: string, converter: ToStringValueConverterWithContext): void;
 }
 
 /**
@@ -42,6 +64,7 @@ export interface ToStringValueConverterService {
  */
 export class DefaultToStringValueConverterService implements ToStringValueConverterService {
     protected readonly converters: Map<string, ToStringValueConverter> = new Map();
+    protected readonly convertersWithContext: Map<string, ToStringValueConverterWithContext> = new Map();
     protected readonly primitiveConverters: Map<PrimitiveType, ToStringValueConverter> = new Map();
 
     constructor() {
@@ -52,8 +75,16 @@ export class DefaultToStringValueConverterService implements ToStringValueConver
         return this.converters.get(ruleName) ?? this.defaultConverter;
     }
 
+    getConverterWithContext(ruleName: string): ToStringValueConverterWithContext {
+        return this.convertersWithContext.get(ruleName) ?? this.defaultConverterWithContext;
+    }
+
     register(ruleName: string, converter: ToStringValueConverter): void {
         this.converters.set(ruleName, converter);
+    }
+
+    registerWithContext(ruleName: string, converter: ToStringValueConverterWithContext): void {
+        this.convertersWithContext.set(ruleName, converter);
     }
 
     protected get ruleName(): string | undefined {
@@ -62,6 +93,10 @@ export class DefaultToStringValueConverterService implements ToStringValueConver
 
     protected get defaultConverter(): ToStringValueConverter {
         return (value: unknown) => String(value);
+    }
+
+    protected get defaultConverterWithContext(): ToStringValueConverterWithContext {
+        return (ctx: ToStringValueContext) => String(ctx.value);
     }
 
     protected registerDefaults(): void {
@@ -114,19 +149,46 @@ export class DefaultToStringValueConverterService implements ToStringValueConver
 
     /**
      * Get converter for a rule - handles both terminal rules and datatype rules.
+     * Custom converters registered for a rule name take precedence over primitive type converters.
      */
     getConverterForRule(rule: AbstractRule): ToStringValueConverter {
         if (isTerminalRule(rule)) {
             return this.getConverter(rule.name);
         }
         if (isParserRule(rule)) {
-            // Check for datatype (primitive type return)
+            const customConverter = this.converters.get(rule.name);
+            if (customConverter) {
+                return customConverter;
+            }
             if (rule.dataType) {
                 return this.getPrimitiveConverter(rule.dataType);
             }
-            // For parser rules that aren't datatypes, use default
             return this.defaultConverter;
         }
         return this.defaultConverter;
+    }
+
+    /**
+     * Get converter for a rule with full context.
+     * Custom context converters registered for a rule name take precedence over primitive type converters.
+     */
+    getConverterForRuleWithContext(rule: AbstractRule): ToStringValueConverterWithContext {
+        if (isTerminalRule(rule)) {
+            return this.getConverterWithContext(rule.name);
+        }
+        if (isParserRule(rule)) {
+            const customConverter = this.convertersWithContext.get(rule.name);
+            if (customConverter) {
+                return customConverter;
+            }
+            if (rule.dataType) {
+                const primitive = this.primitiveConverters.get(rule.dataType);
+                if (primitive) {
+                    return (ctx) => primitive(ctx.value, rule);
+                }
+            }
+            return this.defaultConverterWithContext;
+        }
+        return this.defaultConverterWithContext;
     }
 }

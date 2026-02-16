@@ -6,11 +6,10 @@
 
 import type { AstNode, CstNode } from '../../src/syntax-tree.js';
 import type { AbstractRule } from '../../src/languages/generated/ast.js';
-import type { SerializeValueContext } from '../../src/serializer/text-serializer.js';
 import type { ValueType } from '../../src/parser/value-converter.js';
 import type { LangiumCoreServices } from '../../src/services.js';
 import { DefaultValueConverter } from '../../src/parser/value-converter.js';
-import { DefaultToStringValueConverterService } from '../../src/serializer/to-string-converter.js';
+import { DefaultToStringValueConverterService, type ToStringValueConverterWithContext, type ToStringValueContext } from '../../src/serializer/to-string-converter.js';
 import { createServicesForGrammar } from '../../src/grammar/internal-grammar-util.js';
 import { expandToStringLF } from '../../src/generate/template-string.js';
 import { parseHelper, clearDocuments } from '../../src/test/langium-test.js';
@@ -624,13 +623,15 @@ describe('TextSerializer serializeValue Hook', async () => {
     class EscapedIdToStringConverterService extends DefaultToStringValueConverterService {
         constructor(keywords: Set<string>) {
             super();
-            this.register('EscapedId', (value) => {
-                const strValue = String(value);
+            const converter: ToStringValueConverterWithContext = (ctx) => {
+                const strValue = String(ctx.value);
                 if (keywords.has(strValue)) {
                     return `\`${strValue}\``;
                 }
                 return strValue;
-            });
+            };
+            this.registerWithContext('ID', converter);
+            this.registerWithContext('EscapedId', converter);
         }
     }
 
@@ -688,23 +689,42 @@ describe('TextSerializer serializeValue Hook', async () => {
         expect(text).toBe('model sample');
     });
 
-    test('serializeValue context contains expected properties', async () => {
+    test('ToStringValueContext contains expected properties', async () => {
         const result = await parse('model test');
         expect(result.parseResult.parserErrors).toHaveLength(0);
 
-        let capturedContext: SerializeValueContext | undefined;
-        serializer.serialize(result.parseResult.value, {
-            serializeValue: (context: SerializeValueContext) => {
-                capturedContext = context;
-                return String(context.value);
+        let capturedContext: ToStringValueContext | undefined;
+        const capturingConverter: ToStringValueConverterWithContext = (ctx) => {
+            capturedContext = ctx;
+            return String(ctx.value);
+        };
+
+        const servicesWithCapture = await createServicesForGrammar({
+            grammar,
+            module: {
+                parser: {
+                    ValueConverter: () => new EscapedIdValueConverter()
+                },
+                serializer: {
+                    ToStringValueConverter: () => {
+                        const svc = new DefaultToStringValueConverterService();
+                        svc.registerWithContext('ID', capturingConverter);
+                        svc.registerWithContext('RawId', capturingConverter);
+                        svc.registerWithContext('EscapedId', capturingConverter);
+                        return svc;
+                    }
+                }
             }
         });
+
+        const capturingSerializer = new DefaultTextSerializer(servicesWithCapture);
+        capturingSerializer.serialize(result.parseResult.value);
 
         expect(capturedContext).toMatchObject({
             node: expect.objectContaining({ $type: 'Model' }),
             property: 'name',
             value: 'test',
-            ruleName: expect.stringMatching(/ID|RawId|EscapedId/),
+            rule: expect.objectContaining({ name: expect.stringMatching(/ID|RawId|EscapedId/) }),
             languageId: 'EscapedIdTest'
         });
     });
