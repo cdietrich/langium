@@ -18,6 +18,8 @@ import { DefaultReferences } from './references/references.js';
 import { DefaultScopeComputation } from './references/scope-computation.js';
 import { DefaultScopeProvider } from './references/scope-provider.js';
 import { DefaultJsonSerializer } from './serializer/json-serializer.js';
+import { DefaultTextSerializer } from './serializer/text-serializer.js';
+import { DefaultToStringValueConverterService } from './serializer/to-string-converter.js';
 import { DefaultServiceRegistry } from './service-registry.js';
 import { DefaultDocumentValidator } from './validation/document-validator.js';
 import { ValidationRegistry } from './validation/validation-registry.js';
@@ -78,7 +80,9 @@ export function createDefaultCoreModule(context: DefaultCoreModuleContext): Modu
         },
         serializer: {
             Hydrator: (services) => new DefaultHydrator(services),
-            JsonSerializer: (services) => new DefaultJsonSerializer(services)
+            JsonSerializer: (services) => new DefaultJsonSerializer(services),
+            TextSerializer: (services) => new DefaultTextSerializer(services),
+            ToStringValueConverter: () => new DefaultToStringValueConverterService()
         },
         validation: {
             DocumentValidator: (services) => new DefaultDocumentValidator(services),
