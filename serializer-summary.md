@@ -6,7 +6,7 @@ This document summarizes the implementation of a text serializer/unparser for La
 
 ## What Was Implemented
 
-### Core Files Created
+### Core Files
 
 | File | Description |
 |------|-------------|
@@ -23,10 +23,6 @@ This document summarizes the implementation of a text serializer/unparser for La
 | `packages/langium/src/default-module.ts` | Registered default implementations |
 | `packages/langium/src/serializer/index.ts` | Export new modules |
 
-### Test File
-
-- `packages/langium/test/serializer/text-serializer.test.ts` - 15 tests covering core functionality
-
 ### Features Working
 
 - ✅ Keywords serialization
@@ -42,12 +38,12 @@ This document summarizes the implementation of a text serializer/unparser for La
 - ✅ Unassigned parser rule calls (e.g., `'wrap' Item`)
 - ✅ Fragment inlining at grammar analysis time
 - ✅ Infix rule validation (throws error as specified)
-- ✅ serializeValue hook for customization
+- ✅ ToStringValueConverterService for customization
 
 ### Test Coverage
 
 ```typescript
-// Current tests passing (49/49)
+// Current tests passing
 - Serialize canonical token stream
 - Serialize reference with name provider
 - Serialize optional boolean assignments
@@ -94,9 +90,9 @@ This document summarizes the implementation of a text serializer/unparser for La
 - Keywords are correctly extracted from grammar
 - Parse escaped keyword - backticks are stripped
 - Parse regular ID - no transformation
-- Serialize with serializeValue hook - keyword gets escaped
-- Serialize with serializeValue hook - non-keyword stays unescaped
-- serializeValue context contains expected properties
+- Serialize with ToStringValueConverterService - keyword gets escaped
+- Serialize with ToStringValueConverterService - non-keyword stays unescaped
+- ToStringValueConverter context contains expected properties
 ```
 
 ## What Needs to Be Done
@@ -156,10 +152,30 @@ export function render(doc: Doc): string
 Inverse of ValueConverter - converts typed values back to strings:
 
 ```typescript
+// Simple converter (legacy)
+export type ToStringValueConverter = (value: unknown, rule: AbstractRule) => string;
+
+// Context-based converter (new)
+export interface ToStringValueContext {
+    node: AstNode;
+    property: string;
+    value: unknown;
+    rule: AbstractRule;
+    languageId: string;
+}
+
+export type ToStringValueConverterWithContext = (ctx: ToStringValueContext) => string;
+
 export interface ToStringValueConverterService {
-    getConverter(ruleName: string): ToStringValueConverter;
-    getConverterForRule(rule: AbstractRule): ToStringValueConverter;
+    // Simple converters
+    getConverter(ruleName: string): ToStringValueConverter | undefined;
+    getConverterForRule(rule: AbstractRule): ToStringValueConverter | undefined;
     register(ruleName: string, converter: ToStringValueConverter): void;
+
+    // Context-based converters (preferred)
+    getConverterWithContext(ruleName: string): ToStringValueConverterWithContext | undefined;
+    getConverterForRuleWithContext(rule: AbstractRule): ToStringValueConverterWithContext | undefined;
+    registerWithContext(ruleName: string, converter: ToStringValueConverterWithContext): void;
 }
 ```
 
@@ -183,15 +199,7 @@ export interface GrammarInfo {
 ```typescript
 export interface TextSerializeOptions {
     useRefText?: boolean;           // Use $refText vs computed name
-    serializeValue?: (ctx: SerializeValueContext) => string;  // Hook
-}
-
-export interface SerializeValueContext {
-    node: AstNode;
-    property: string;
-    value: unknown;
-    ruleName: string;
-    languageId: string;
+    // serializeValue hook removed - use ToStringValueConverterService instead
 }
 ```
 
@@ -214,13 +222,14 @@ const serializer = services.serializer.TextSerializer;
 const ast = parseResult.parseResult.value;
 const text = serializer.serialize(ast);
 
-// With options
-const text2 = serializer.serialize(ast, {
-    useRefText: false,
-    serializeValue: (ctx) => {
-        // Custom serialization logic
-        return String(ctx.value);
-    }
+// Custom value serialization via ToStringValueConverterService
+services.serializer.ToStringValueConverterService.registerWithContext('MyRule', (ctx) => {
+    // ctx.node - the AST node being serialized
+    // ctx.property - the property name
+    // ctx.value - the value to serialize
+    // ctx.rule - the grammar rule
+    // ctx.languageId - the language identifier
+    return String(ctx.value);
 });
 ```
 
