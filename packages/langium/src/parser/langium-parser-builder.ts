@@ -14,7 +14,7 @@ import { createParser } from './parser-builder-base.js';
  */
 export function createLangiumParser(services: LangiumCoreServices): LangiumParser {
     const parser = prepareLangiumParser(services);
-    parser.finalize();
+    parser.finalize(services.parser.ParserAnalysis);
     return parser;
 }
 

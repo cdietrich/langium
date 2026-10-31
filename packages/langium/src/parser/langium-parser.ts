@@ -15,6 +15,7 @@ import type { Lexer, LexerResult } from './lexer.js';
 import type { IParserConfig } from './parser-config.js';
 import type { ValueConverter } from './value-converter.js';
 import { defaultParserErrorProvider, EmbeddedActionsParser, LLkLookaheadStrategy } from 'chevrotain';
+import type { Rule } from 'chevrotain';
 import { LLStarLookaheadStrategy } from 'chevrotain-allstar';
 import { isAssignment, isCrossReference, isKeyword, isParserRule } from '../languages/generated/ast.js';
 import { getTypeName, isDataTypeRule } from '../utils/grammar-utils.js';
@@ -24,6 +25,8 @@ import { isAstNode } from '../syntax-tree.js';
 import { CstNodeBuilder } from './cst-node-builder.js';
 import type { LexingReport } from './token-builder.js';
 import type { ProfilingTask } from '../workspace/profiler.js';
+import type { ChevrotainAnalysisInternals, ParserAnalysis } from './parser-analysis.js';
+import { computeParserFingerprint, deserializeFollows, deserializeRules, serializeParserAnalysis } from './parser-analysis.js';
 
 export type ParseResult<T = AstNode> = {
     value: T,
@@ -196,8 +199,19 @@ export abstract class AbstractLangiumParser implements BaseParser {
         return (this.wrapper as any).RULE_STACK;
     }
 
-    finalize(): void {
-        this.wrapper.wrapSelfAnalysis();
+    /**
+     * Runs Chevrotain's self analysis. A precomputed {@link ParserAnalysis} that matches this parser
+     * replaces the grammar recording and follow set computation; otherwise both run as usual.
+     */
+    finalize(analysis?: ParserAnalysis): void {
+        this.wrapper.wrapSelfAnalysis(analysis);
+    }
+
+    /**
+     * Serializes the analysis of this (finalized) parser, e.g. to ship it with the generated grammar.
+     */
+    serializeAnalysis(): ParserAnalysis {
+        return serializeParserAnalysis(this.wrapper as unknown as ChevrotainAnalysisInternals);
     }
 }
 
@@ -211,9 +225,9 @@ interface OperatorPrecedence {
 }
 
 export class LangiumParser extends AbstractLangiumParser {
-    private readonly linker: Linker;
-    private readonly converter: ValueConverter;
-    private readonly astReflection: AstReflection;
+    protected linker: Linker;
+    protected converter: ValueConverter;
+    protected astReflection: AstReflection;
     private readonly nodeBuilder = new CstNodeBuilder();
     private lexerResult?: LexerResult;
     private stack: any[] = [];
@@ -226,6 +240,18 @@ export class LangiumParser extends AbstractLangiumParser {
 
     constructor(services: LangiumCoreServices) {
         super(services, false);
+        this.linker = services.references.Linker;
+        this.converter = services.parser.ValueConverter;
+        this.astReflection = services.shared.AstReflection;
+    }
+
+    /**
+     * Binds the services the parser hands its results to: the linker that creates references,
+     * the value converter and the AST reflection. Apart from these, a parser keeps no state between
+     * two `parse` calls that depends on the service container it was created for. Rebinding therefore
+     * allows one parser instance to serve several containers of the same language, see `LangiumParserCache`.
+     */
+    bindServices(services: LangiumCoreServices): void {
         this.linker = services.references.Linker;
         this.converter = services.parser.ValueConverter;
         this.astReflection = services.shared.AstReflection;
@@ -848,8 +874,53 @@ class ChevrotainWrapper extends EmbeddedActionsParser {
         return this.RULE(name, impl, config);
     }
 
-    wrapSelfAnalysis(): void {
-        this.performSelfAnalysis();
+    wrapSelfAnalysis(analysis?: ParserAnalysis): void {
+        const internals = this as unknown as ChevrotainAnalysisInternals;
+        if (!analysis || analysis.version !== 1 || analysis.fingerprint !== computeParserFingerprint(internals)) {
+            this.performSelfAnalysis();
+            return;
+        }
+        this.precomputedRules = deserializeRules(analysis, internals.tokensMap);
+        const follows = internals.recoveryEnabled ? deserializeFollows(analysis, internals.tokensMap) : undefined;
+        // Chevrotain only computes the follow sets when recovery is enabled, so we switch it off for the analysis
+        const recoveryEnabled = internals.recoveryEnabled;
+        if (follows) {
+            internals.recoveryEnabled = false;
+        }
+        try {
+            this.performSelfAnalysis();
+        } finally {
+            this.precomputedRules = undefined;
+            internals.recoveryEnabled = recoveryEnabled;
+        }
+        if (follows) {
+            internals.resyncFollows = follows;
+        }
+    }
+
+    /**
+     * Rules from a precomputed analysis. While set, the hooks below replace Chevrotain's grammar recording
+     * (which invokes every rule in recording mode) with a lookup.
+     */
+    private precomputedRules?: Record<string, Rule>;
+
+    enableRecording(): void {
+        if (!this.precomputedRules) {
+            (EmbeddedActionsParser.prototype as any).enableRecording.call(this);
+        }
+    }
+
+    disableRecording(): void {
+        if (!this.precomputedRules) {
+            (EmbeddedActionsParser.prototype as any).disableRecording.call(this);
+        }
+    }
+
+    topLevelRuleRecord(name: string, def: unknown): Rule {
+        if (this.precomputedRules) {
+            return this.precomputedRules[name];
+        }
+        return (EmbeddedActionsParser.prototype as any).topLevelRuleRecord.call(this, name, def);
     }
 
     wrapConsume(idx: number, tokenType: TokenType): IToken {

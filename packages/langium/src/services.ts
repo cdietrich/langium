@@ -15,6 +15,7 @@ import type { AsyncParser } from './parser/async-parser.js';
 import type { LangiumCompletionParser, LangiumParser } from './parser/langium-parser.js';
 import type { Lexer } from './parser/lexer.js';
 import type { IParserConfig } from './parser/parser-config.js';
+import type { ParserAnalysis } from './parser/parser-analysis.js';
 import type { TokenBuilder } from './parser/token-builder.js';
 import type { ValueConverter } from './parser/value-converter.js';
 import type { Linker } from './references/linker.js';
@@ -48,6 +49,10 @@ export type LangiumGeneratedCoreServices = {
     readonly LanguageMetaData: LanguageMetaData
     readonly parser: {
         readonly ParserConfig?: IParserConfig
+        /**
+         * Precomputed result of Chevrotain's grammar recording, see {@link ParserAnalysis}.
+         */
+        readonly ParserAnalysis?: ParserAnalysis
     }
 }
 
