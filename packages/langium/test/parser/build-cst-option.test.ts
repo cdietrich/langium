@@ -12,7 +12,7 @@ import type { LangiumServices, PartialLangiumServices } from 'langium/lsp';
 import { parseHelper } from 'langium/test';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { beforeAll, describe, expect, test } from 'vitest';
+import { beforeAll, describe, expect, test, vi } from 'vitest';
 
 /*
  * `LangiumParser.parse(text, { buildCst: false })` must produce exactly the AST, lexer errors and parser
@@ -727,19 +727,23 @@ describe('value converter contract for CST-free parsing', () => {
         expect(new RecordingConverter().supportsCstFreeConversion).toBe(true);
     });
 
-    test('without the opt-in, buildCst: false still builds the CST', async () => {
+    test('without the opt-in, buildCst: false throws before lexing', async () => {
         const services = await createServices(() => new TextReadingConverter());
         const parser = services.parser.LangiumParser;
+        const tokenize = vi.spyOn(services.parser.Lexer, 'tokenize');
+        expect(() => parser.parse('a = 7 b ext x.y', { buildCst: false })).toThrow('supportsCstFreeConversion');
+        expect(tokenize).not.toHaveBeenCalled();
+
         const withCst = parser.parse('a = 7 b ext x.y');
-        const requested = parser.parse('a = 7 b ext x.y', { buildCst: false });
-        expect(requested.value.$cstNode).toBeDefined();
-        expect(requested.value).toMatchObject({ items: [{ name: 'a', value: 1007 }, { name: 'b', ext: 'x.y' }] });
-        expect(cstSnapshot(requested)).toEqual(cstSnapshot(withCst));
+        expect(withCst.value.$cstNode).toBeDefined();
+        expect(withCst.value).toMatchObject({ items: [{ name: 'a', value: 1007 }, { name: 'b', ext: 'x.y' }] });
     });
 
-    test('a converter that only implements the interface gets a CST', async () => {
+    test('a converter that only implements the interface supports the default CST mode', async () => {
         const services = await createServices(() => ({ convert: (input, cstNode) => new DefaultValueConverter().convert(input, cstNode) }));
-        expect(services.parser.LangiumParser.parse('a = 7', { buildCst: false }).value.$cstNode).toBeDefined();
+        const parser = services.parser.LangiumParser;
+        expect(() => parser.parse('a = 7', { buildCst: false })).toThrow('supportsCstFreeConversion');
+        expect(parser.parse('a = 7').value.$cstNode).toBeDefined();
     });
 
     test('with the opt-in, the converter receives a stand-in that only carries the grammar element', async () => {
