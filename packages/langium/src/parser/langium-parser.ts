@@ -242,11 +242,10 @@ export interface ParserOptions {
      * A document created this way doesn't stay CST-free: `LangiumDocumentFactory.update` re-parses it
      * with a CST, e.g. when it is opened in an editor or changes on disk.
      *
-     * This option is only honoured if the language's {@link ValueConverter} declares
-     * {@link ValueConverter.supportsCstFreeConversion}, since without a CST its `convert` method
-     * receives a stand-in node that only carries `grammarSource`. Otherwise the CST is built anyway,
-     * without notice. This only depends on the language, so callers can check it before parsing,
-     * with `services.parser.ValueConverter.supportsCstFreeConversion === true`.
+     * Setting this to `false` requires the language's {@link ValueConverter} to declare
+     * {@link ValueConverter.supportsCstFreeConversion}. Its `convert` method receives a stand-in
+     * node that only carries `grammarSource`. The parser throws before lexing if the converter
+     * does not support this mode.
      */
     buildCst?: boolean
 }
@@ -359,9 +358,11 @@ export class LangiumParser extends AbstractLangiumParser {
     }
 
     parse<T extends AstNode = AstNode>(input: string, options: ParserOptions = {}): ParseResult<T> {
-        // Without a CST, the value converter only receives the grammar element. A converter that has
-        // not declared that this is enough for it gets a CST as before.
-        this.buildCst = options.buildCst !== false || this.converter.supportsCstFreeConversion !== true;
+        const buildCst = options.buildCst !== false;
+        if (!buildCst && this.converter.supportsCstFreeConversion !== true) {
+            throw new Error('buildCst: false requires a ValueConverter with supportsCstFreeConversion set to true.');
+        }
+        this.buildCst = buildCst;
         if (this.buildCst) {
             this.nodeBuilder.buildRootNode(input);
         } else {

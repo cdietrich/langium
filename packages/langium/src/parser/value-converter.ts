@@ -19,8 +19,8 @@ export interface ValueConverter {
     convert(input: string, cstNode: CstNode): ValueType;
     /**
      * Whether `convert` only reads `cstNode.grammarSource`. When parsing with `buildCst: false`
-     * (see `ParserOptions`), `convert` receives a stand-in node that carries nothing else, so that option
-     * is only honoured if the converter declares this; otherwise the CST is built as usual.
+     * (see `ParserOptions`), `convert` receives a stand-in node that carries nothing else.
+     * Set this to `true` to support CST-free parsing.
      * Defaults to `false`.
      */
     readonly supportsCstFreeConversion?: boolean;
